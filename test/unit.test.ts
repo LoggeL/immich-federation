@@ -10,7 +10,25 @@ import { streamToFile, TooLargeError } from '../src/media.ts';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildDateTimeOriginal, federationDescription } from '../src/sync.ts';
+import { DatabaseSync } from 'node:sqlite';
+import { immichErrorMessage } from '../src/api.ts';
+import { Store, type LinkRow } from '../src/db.ts';
+import {
+  acceptLanguage,
+  catalogs,
+  encodeStored,
+  format,
+  localizeStored,
+  LocalizedError,
+  msg,
+  requestLang,
+  resolveLang,
+  storedIs,
+  t,
+} from '../src/i18n.ts';
+import { ImmichError } from '../src/immich.ts';
+import { RemoteError } from '../src/remote.ts';
+import { albumDescription, buildDateTimeOriginal, federationDescription, syncErrorMessage } from '../src/sync.ts';
 
 const ID = '0195f3a2-7c4b-7d1e-9a2b-1234567890ab';
 
@@ -187,12 +205,19 @@ describe('sync helpers', () => {
       '2025-01-01T07:00:00.000+00:00',
     );
   });
-  it('describes the origin', () => {
-    assert.equal(federationDescription({ id: 'x', type: 'IMAGE' }, 'h:1', 'Anna'), 'Föderiert von h:1 · Anna');
+  it('describes the origin in the link language', () => {
+    assert.equal(federationDescription({ id: 'x', type: 'IMAGE' }, 'h:1', 'Anna', 'de'), 'Föderiert von h:1 · Anna');
+    assert.equal(federationDescription({ id: 'x', type: 'IMAGE' }, 'h:1', 'Anna', 'en'), 'Federated from h:1 · Anna');
     assert.equal(
-      federationDescription({ id: 'x', type: 'IMAGE', exifInfo: { description: 'Strand' } }, 'h', ''),
+      federationDescription({ id: 'x', type: 'IMAGE', exifInfo: { description: 'Strand' } }, 'h', '', 'de'),
       'Strand\n\nFöderiert von h',
     );
+    assert.equal(
+      federationDescription({ id: 'x', type: 'IMAGE', exifInfo: { description: ' Beach ' } }, 'h', '', 'en'),
+      'Beach\n\nFederated from h',
+    );
+    assert.equal(albumDescription('h', 'Anna', 'de'), 'Föderiert von h (Anna)');
+    assert.equal(albumDescription('h', '', 'en'), 'Federated from h');
   });
   it('builds upload filenames', () => {
     assert.equal(uploadFilename('PXL_2025.HEIC', 'r', extensionForMime('image/jpeg', '.jpg')), 'PXL_2025.jpg');
@@ -227,5 +252,203 @@ describe('streamToFile', () => {
     const body = new Response(new Uint8Array(4096)).body;
     await assert.rejects(streamToFile(body, join(dir, 'x'), 1000), TooLargeError);
     assert.equal(await streamToFile(new Response(new Uint8Array(500)).body, join(dir, 'y'), 1000), 500);
+  });
+});
+
+describe('i18n', () => {
+  it('resolves language codes', () => {
+    assert.equal(resolveLang('de'), 'de');
+    assert.equal(resolveLang('de-CH'), 'de');
+    assert.equal(resolveLang('de_CH'), 'de');
+    assert.equal(resolveLang('DE_at'), 'de');
+    assert.equal(resolveLang('gsw'), 'de');
+    assert.equal(resolveLang('swg'), 'de');
+    assert.equal(resolveLang('en-US'), 'en');
+    assert.equal(resolveLang('fr'), 'en');
+    assert.equal(resolveLang('dev'), 'en');
+    assert.equal(resolveLang(''), 'en');
+    assert.equal(resolveLang(undefined), 'en');
+    assert.equal(resolveLang(null), 'en');
+  });
+
+  it('picks the request language from X-Federation-Lang, then Accept-Language', () => {
+    assert.equal(requestLang({ 'x-federation-lang': 'de-CH' }), 'de');
+    assert.equal(requestLang({ 'x-federation-lang': 'en', 'accept-language': 'de' }), 'en');
+    assert.equal(requestLang({ 'x-federation-lang': 'fr', 'accept-language': 'de' }), 'en');
+    assert.equal(requestLang({ 'accept-language': 'fr-FR, de-DE;q=0.8, en;q=0.5' }), 'de');
+    assert.equal(requestLang({ 'accept-language': 'en;q=0.4, de;q=0.9' }), 'de');
+    assert.equal(requestLang({ 'accept-language': 'fr, *;q=0.1' }), 'en');
+    assert.equal(requestLang({}), 'en');
+    assert.equal(acceptLanguage('de;q=0, en'), 'en');
+    assert.equal(acceptLanguage(''), undefined);
+  });
+
+  it('translates with params, nested messages and fallbacks', () => {
+    assert.equal(t('en', 'album_already_connected', { name: 'Urlaub' }), 'This album is already connected (Urlaub)');
+    assert.equal(t('de', 'album_already_connected', { name: 'Urlaub' }), 'Dieses Album ist bereits verbunden (Urlaub)');
+    const nested = msg('items_failed', { count: 2, example: msg('file_too_large', { mb: 5 }) });
+    assert.equal(format('en', nested), '2 item(s) failed, e.g.: File too large (5 MB) – skipped');
+    assert.equal(format('de', nested), '2 Element(e) fehlgeschlagen, z.B.: Datei zu groß (5 MB) – übersprungen');
+    assert.equal(t('en', 'sync_failed', { detail: '{detail} $& stays' }), 'Sync failed: {detail} $& stays');
+    assert.equal(t('fr' as any, 'not_logged_in'), 'Not logged in');
+  });
+
+  it('has the same keys and placeholders in every catalog', () => {
+    const placeholders = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
+    assert.deepEqual(Object.keys(catalogs.de).sort(), Object.keys(catalogs.en).sort());
+    for (const key of Object.keys(catalogs.en) as Array<keyof typeof catalogs.en>) {
+      assert.deepEqual(placeholders(catalogs.de[key]), placeholders(catalogs.en[key]), key);
+    }
+  });
+
+  it('LocalizedError has an English message and stays translatable', () => {
+    const error = new RemoteError('remote_http', { status: 500, suffix: '' }, 500);
+    assert.ok(error instanceof LocalizedError);
+    assert.equal(error.message, 'Remote server responded with HTTP 500');
+    assert.equal(format('de', error.toMsg()), 'Entfernter Server antwortete mit HTTP 500');
+  });
+
+  it('stores markers and translates them when read; legacy text passes through', () => {
+    const stored = encodeStored(msg('sync_failed', { detail: msg('timeout', { ms: 20000 }) }));
+    assert.equal(stored, '{"$t":"sync_failed","p":{"detail":{"$t":"timeout","p":{"ms":20000}}}}');
+    assert.equal(localizeStored(stored, 'en'), 'Sync failed: Timed out after 20000 ms');
+    assert.equal(localizeStored(stored, 'de'), 'Synchronisation fehlgeschlagen: Zeitüberschreitung nach 20000 ms');
+    assert.equal(localizeStored('Sync fertig in 3 s: +1 / -0', 'en'), 'Sync fertig in 3 s: +1 / -0');
+    assert.equal(localizeStored('{"not":"a marker"}', 'de'), '{"not":"a marker"}');
+    assert.equal(localizeStored('{"$t":broken', 'de'), '{"$t":broken');
+    assert.equal(localizeStored(null, 'de'), null);
+    assert.equal(encodeStored('plain'), 'plain');
+    const long = encodeStored(msg('sync_failed', { detail: 'x'.repeat(5000) }));
+    assert.ok(long.length < 1100);
+    assert.match(localizeStored(long, 'en'), /^Sync failed: x+…$/);
+  });
+
+  it('recognizes stored messages by key, including legacy German rows', () => {
+    assert.equal(storedIs(encodeStored(msg('api_key_invalid', { detail: 'x' })), 'api_key_invalid'), true);
+    assert.equal(storedIs(encodeStored(msg('sync_failed', { detail: 'x' })), 'api_key_invalid'), false);
+    assert.equal(
+      storedIs(
+        'API-Schlüssel des Gateways ungültig – Föderationsseite einmal öffnen, dann wird er erneuert: Immich GET /api/users/me -> 401',
+        'api_key_invalid',
+      ),
+      true,
+    );
+    assert.equal(storedIs('Synchronisation fehlgeschlagen: x', 'api_key_invalid'), false);
+    assert.equal(storedIs(null, 'api_key_invalid'), false);
+  });
+
+  it('maps sync and Immich errors to messages', () => {
+    assert.equal(syncErrorMessage(new ImmichError('Immich GET /api/users/me -> 401', 401)).$t, 'api_key_invalid');
+    assert.equal(
+      format('de', syncErrorMessage(new RemoteError('remote_link_invalid', { suffix: '' }, 401))),
+      'Freigabelink ungültig, abgelaufen oder widerrufen',
+    );
+    assert.equal(
+      format('en', syncErrorMessage(Object.assign(new Error('fetch failed'), { cause: { code: 'ECONNREFUSED' } }))),
+      'Sync failed: fetch failed (ECONNREFUSED)',
+    );
+    const created = new ImmichError('technical', 403, undefined, msg('api_key_create_failed'));
+    assert.equal(syncErrorMessage(created).$t, 'api_key_create_failed');
+    assert.equal(immichErrorMessage(created).$t, 'api_key_create_failed');
+    assert.equal(immichErrorMessage(new ImmichError('x', 401)).$t, 'immich_session_expired');
+    assert.equal(format('de', immichErrorMessage(new ImmichError('x', 0))), 'Immich ist gerade nicht erreichbar (Netzwerk)');
+    assert.equal(format('en', immichErrorMessage(new ImmichError('x', 503))), 'Immich is currently unreachable (503)');
+    assert.equal(format('en', immichErrorMessage(new ImmichError('x', 422))), 'Immich rejected the request (422)');
+  });
+});
+
+describe('links.lang migration', () => {
+  const box = new SecretBox('a-very-secret-secret-value');
+  const link = (id: string, lang: 'en' | 'de'): LinkRow => ({
+    id,
+    userId: 'u1',
+    baseUrl: 'https://friend.example',
+    serverHost: 'friend.example',
+    shareKey: 'KEY12345678',
+    shareSlug: null,
+    remoteLinkId: id,
+    remoteAlbumId: null,
+    remoteAlbumName: 'A',
+    remoteOwnerName: '',
+    albumId: 'album-' + id,
+    showInTimeline: true,
+    importVideos: true,
+    allowDownload: true,
+    showMetadata: true,
+    lang,
+    createdAt: new Date().toISOString(),
+    lastSyncedAt: null,
+    lastError: null,
+  });
+
+  it('marks links created before i18n as German, keeps the language of new links', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'fed-migrate-'));
+    // pre-i18n schema: no lang column
+    const old = new DatabaseSync(join(dir, 'federation.sqlite'));
+    old.exec(`
+      CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT NOT NULL, name TEXT NOT NULL, apiKeyId TEXT NOT NULL,
+        apiKeyEnc TEXT NOT NULL, createdAt TEXT NOT NULL);
+      CREATE TABLE links (id TEXT PRIMARY KEY, userId TEXT NOT NULL REFERENCES users(id), baseUrl TEXT NOT NULL,
+        serverHost TEXT NOT NULL, shareKeyEnc TEXT, shareSlugEnc TEXT, remoteLinkId TEXT NOT NULL, remoteAlbumId TEXT,
+        remoteAlbumName TEXT NOT NULL, remoteOwnerName TEXT NOT NULL, albumId TEXT NOT NULL,
+        showInTimeline INTEGER NOT NULL DEFAULT 1, allowDownload INTEGER NOT NULL DEFAULT 1,
+        showMetadata INTEGER NOT NULL DEFAULT 1, createdAt TEXT NOT NULL, lastSyncedAt TEXT, lastError TEXT);
+      INSERT INTO users VALUES ('u1', 'a@x', 'A', 'k', 'v1:x', '2025-01-01');
+      INSERT INTO links (id, userId, baseUrl, serverHost, remoteLinkId, remoteAlbumName, remoteOwnerName, albumId, createdAt, lastError)
+        VALUES ('old', 'u1', 'https://f', 'f', 'r', 'A', '', 'al', '2025-01-01', 'Synchronisation fehlgeschlagen: x');
+    `);
+    old.close();
+
+    const store = new Store(dir, box);
+    assert.equal(store.getLink('old')!.lang, 'de');
+    assert.equal(localizeStored(store.getLink('old')!.lastError, 'en'), 'Synchronisation fehlgeschlagen: x');
+    store.insertLink(link('new-en', 'en'));
+    store.insertLink(link('new-de', 'de'));
+    store.close();
+
+    const reopened = new Store(dir, box);
+    assert.equal(reopened.getLink('old')!.lang, 'de');
+    assert.equal(reopened.getLink('new-en')!.lang, 'en');
+    assert.equal(reopened.getLink('new-de')!.lang, 'de');
+    reopened.log('new-en', 'info', msg('connected_by', { email: 'a@x' }));
+    reopened.log('new-en', 'info', 'legacy text');
+    assert.deepEqual(
+      reopened.getLog('new-en').map((e) => localizeStored(e.message, 'de')),
+      ['legacy text', 'Verbunden durch a@x'],
+    );
+    reopened.close();
+  });
+
+  it('fresh databases store the given language', () => {
+    const store = new Store(mkdtempSync(join(tmpdir(), 'fed-fresh-')), box);
+    store.db.prepare("INSERT INTO users VALUES ('u1', 'a@x', 'A', 'k', 'v1:x', '2025-01-01')").run();
+    store.insertLink(link('l1', 'en'));
+    assert.equal(store.getLink('l1')!.lang, 'en');
+    store.close();
+  });
+});
+
+describe('proxy upstream error', () => {
+  it('answers 502 in the request language', async () => {
+    const { Proxy } = await import('../src/proxy.ts');
+    const http = await import('node:http');
+    const { setLogLevel } = await import('../src/log.ts');
+    setLogLevel('silent');
+    const proxy = new Proxy({ upstream: new URL('http://127.0.0.1:9') });
+    const server = http.createServer((req, res) => proxy.web(req, res));
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const { port } = server.address() as import('node:net').AddressInfo;
+    try {
+      const en = await fetch(`http://127.0.0.1:${port}/api/x`);
+      assert.equal(en.status, 502);
+      assert.deepEqual(await en.json(), { message: 'Immich is unreachable (gateway)', statusCode: 502, code: 'immich_unreachable_gateway' });
+      const de = await fetch(`http://127.0.0.1:${port}/api/x`, { headers: { 'x-federation-lang': 'de' } });
+      assert.equal(((await de.json()) as any).message, 'Immich ist nicht erreichbar (Gateway)');
+    } finally {
+      proxy.close();
+      server.closeAllConnections();
+      await new Promise((r) => server.close(r));
+      setLogLevel(process.env.LOG_LEVEL ?? 'info');
+    }
   });
 });

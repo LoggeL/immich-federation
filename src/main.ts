@@ -10,12 +10,12 @@ try {
   setLogLevel(config.logLevel);
   gateway = await createGateway(config);
 } catch (error) {
-  log.error(`Start fehlgeschlagen: ${(error as Error).message}`);
+  log.error(`Startup failed: ${(error as Error).message}`);
   process.exit(1);
 }
 const port = await gateway.listen();
 log.info(
-  `immich-federation gateway auf :${port} -> ${config.immichUrl.origin} (Daten: ${config.dataDir}, private Remotes: ${config.allowPrivateRemotes})`,
+  `immich-federation gateway on :${port} -> ${config.immichUrl.origin} (data: ${config.dataDir}, private remotes: ${config.allowPrivateRemotes})`,
 );
 
 let stopping = false;
@@ -25,7 +25,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
       process.exit(1);
     }
     stopping = true;
-    log.info(`${signal} empfangen, beende …`);
+    log.info(`${signal} received, shutting down …`);
     const force = setTimeout(() => process.exit(0), 10_000);
     force.unref();
     gateway.close().finally(() => process.exit(0));

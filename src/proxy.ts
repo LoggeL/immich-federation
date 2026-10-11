@@ -1,6 +1,7 @@
 import http, { type IncomingHttpHeaders, type IncomingMessage, type ServerResponse } from 'node:http';
 import https from 'node:https';
 import type { Duplex } from 'node:stream';
+import { requestLang, t } from './i18n.ts';
 import { injectScript, isHtmlResponse, isNavigationRequest } from './inject.ts';
 import { logger } from './log.ts';
 
@@ -183,10 +184,11 @@ export class Proxy {
     });
 
     upstreamReq.on('error', (error) => {
-      log.warn(`Upstream-Fehler ${req.method} ${req.url?.split('?')[0]}: ${error.message}`);
+      log.warn(`Upstream error ${req.method} ${req.url?.split('?')[0]}: ${error.message}`);
       if (!res.headersSent) {
+        const message = t(requestLang(req.headers), 'immich_unreachable_gateway');
         res.writeHead(502, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ message: 'Immich ist nicht erreichbar (Gateway)', statusCode: 502 }));
+        res.end(JSON.stringify({ message, statusCode: 502, code: 'immich_unreachable_gateway' }));
       } else {
         res.destroy();
       }
@@ -231,7 +233,7 @@ export class Proxy {
     });
     const fail = (error?: Error) => {
       if (error) {
-        log.debug(`WebSocket-Upstream-Fehler: ${error.message}`);
+        log.debug(`WebSocket upstream error: ${error.message}`);
       }
       if (!socket.destroyed) {
         socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');

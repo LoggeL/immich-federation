@@ -1,56 +1,58 @@
 <!doctype html>
-<html lang="de">
+<html lang="en" data-i18n-pending>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light dark" />
-    <title>Föderation · Immich</title>
+    <title>Federation · Immich</title>
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="stylesheet" href="/federation/ui.css" />
+    <!-- i18n.js must run before ui.js (both defer → document order) -->
+    <script src="/federation/i18n.js" defer></script>
     <script src="/federation/ui.js" defer></script>
   </head>
   <body>
-    <a class="skip" href="#main">Zum Inhalt springen</a>
+    <a class="skip" href="#main" data-i18n="page.skip">Skip to content</a>
     <header class="topbar">
-      <a class="brand" href="/" title="Zurück zu Immich">
+      <a class="brand" href="/" title="Back to Immich" data-i18n-attr="title:page.backToImmich">
         <img src="/favicon-96.png" alt="" width="32" height="32" />
         <span class="brand-text">immich</span>
-        <span class="brand-sub">Föderation</span>
+        <span class="brand-sub" data-i18n="common.federation">Federation</span>
       </a>
       <div class="topbar-right">
         <span id="user" class="user" hidden></span>
         <a class="btn btn-ghost" href="/">
           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M20,11V13H8L13.5,18.5L12.08,19.92L4.16,12L12.08,4.08L13.5,5.5L8,11H20Z" /></svg>
-          <span>Zurück zu Immich</span>
+          <span data-i18n="page.backToImmich">Back to Immich</span>
         </a>
       </div>
     </header>
 
     <main id="main" tabindex="-1">
       <div class="page-head">
-        <h1>Föderierte Alben</h1>
-        <p class="lead">
-          Verbinde Alben von Immich-Servern deiner Freunde mit deinem eigenen Immich. Vorschaubilder, Metadaten und alle
-          Suchindizes (Smart Search, Gesichter, Texterkennung) liegen lokal; das Original wird erst beim Öffnen vom
-          anderen Server geladen.
+        <h1 data-i18n="page.heading">Federated albums</h1>
+        <p class="lead" data-i18n="page.lead">
+          Connect albums from your friends' Immich servers to your own Immich. Thumbnails, metadata and all search
+          indexes (smart search, faces, text recognition) are stored locally; the original is only loaded from the
+          other server when you open it.
         </p>
       </div>
 
       <section id="auth" class="card notice" hidden aria-live="polite">
         <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path fill="currentColor" d="M11,15H13V17H11V15M11,7H13V13H11V7M12,2C6.47,2 2,6.5 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20Z" /></svg>
         <div>
-          <strong>Bitte in Immich anmelden</strong>
-          <p>Diese Seite nutzt deine Immich-Anmeldung.</p>
-          <a id="login-link" class="btn btn-primary" href="/auth/login?continue=%2Ffederation%2F">Zur Anmeldung</a>
+          <strong data-i18n="page.authTitle">Please log in to Immich</strong>
+          <p data-i18n="page.authText">This page uses your Immich login.</p>
+          <a id="login-link" class="btn btn-primary" href="/auth/login?continue=%2Ffederation%2F" data-i18n="common.toLogin">Log in</a>
         </div>
       </section>
 
       <div id="app" hidden>
         <section class="card" aria-labelledby="connect-title">
-          <h2 id="connect-title">Album verbinden</h2>
+          <h2 id="connect-title" data-i18n="page.connectTitle">Connect album</h2>
           <form id="connect-form" novalidate>
             <div class="field">
-              <label for="share-url">Freigabe-Link</label>
+              <label for="share-url" data-i18n="connect.shareLink">Share link</label>
               <input
                 id="share-url"
                 name="shareUrl"
@@ -59,46 +61,47 @@
                 autocomplete="off"
                 spellcheck="false"
                 required
-                placeholder="https://fotos.example.org/share/…"
+                placeholder="https://photos.example.org/share/…"
+                data-i18n-attr="placeholder:connect.placeholder"
                 aria-describedby="share-hint"
               />
-              <div id="share-hint" class="hint">
-                Den Link erstellt die andere Person in ihrem Immich unter „Album teilen → Link erstellen“.
+              <div id="share-hint" class="hint" data-i18n="connect.shareHint">
+                The other person creates this link in their Immich via "Share → Create link" on the album.
               </div>
             </div>
             <div class="row">
               <label for="show-timeline" class="switch-label">
-                <span class="switch-title">In Zeitleiste anzeigen</span>
-                <span class="hint">Aus: Fotos erscheinen nur im Album (archiviert).</span>
+                <span class="switch-title" data-i18n="connect.showInTimeline">Show in timeline</span>
+                <span class="hint" data-i18n="connect.showInTimelineHint">Off: photos only appear in the album (archived).</span>
               </label>
               <input id="show-timeline" name="showInTimeline" class="switch" type="checkbox" role="switch" />
             </div>
             <div class="row">
               <label for="import-videos" class="switch-label">
-                <span class="switch-title">Videos importieren</span>
-                <span class="hint">Dafür wird jedes Video einmal ganz geladen und verkleinert. Aus: nur Fotos.</span>
+                <span class="switch-title" data-i18n="connect.importVideos">Import videos</span>
+                <span class="hint" data-i18n="connect.importVideosHint">Each video is downloaded in full once and downscaled. Off: photos only.</span>
               </label>
               <input id="import-videos" name="importVideos" class="switch" type="checkbox" role="switch" checked />
             </div>
             <div id="connect-msg" class="msg" role="status" aria-live="polite" hidden></div>
             <div class="form-actions">
-              <button id="connect-btn" type="submit" class="btn btn-primary">Verbinden</button>
+              <button id="connect-btn" type="submit" class="btn btn-primary">Connect</button>
             </div>
           </form>
         </section>
 
         <section aria-labelledby="links-title" class="links-section">
           <div class="section-head">
-            <h2 id="links-title">Verbundene Alben</h2>
-            <button id="reload-btn" type="button" class="btn btn-ghost" title="Liste aktualisieren">
+            <h2 id="links-title" data-i18n="page.linksTitle">Connected albums</h2>
+            <button id="reload-btn" type="button" class="btn btn-ghost" title="Refresh list" data-i18n-attr="title:page.reloadTitle">
               <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z" /></svg>
-              <span>Aktualisieren</span>
+              <span data-i18n="page.reload">Refresh</span>
             </button>
           </div>
           <div id="list-error" class="msg msg-error" role="alert" hidden></div>
           <div id="flash" class="msg msg-success" role="status" aria-live="polite" hidden></div>
           <div id="links" class="links" aria-live="polite" aria-busy="true">
-            <p class="empty">Lade …</p>
+            <p class="empty">Loading …</p>
           </div>
         </section>
       </div>
@@ -107,7 +110,7 @@
     <footer class="footer">
       <span>immich-federation</span>
       <span aria-hidden="true">·</span>
-      <a href="/">Immich öffnen</a>
+      <a href="/" data-i18n="page.openImmich">Open Immich</a>
     </footer>
   </body>
 </html>

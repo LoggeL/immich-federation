@@ -138,7 +138,7 @@ export async function handleIntercept(
   try {
     check = await deps.checkLocal(req, match.checkPath + match.search);
   } catch (error) {
-    log.warn(`Lokale Zugriffsprüfung für ${match.assetId} fehlgeschlagen`, (error as Error).message);
+    log.warn(`Local access check for ${match.assetId} failed`, (error as Error).message);
     deps.passThrough(req, res);
     return true;
   }
@@ -178,7 +178,7 @@ export async function handleIntercept(
   } catch (error) {
     res.off('close', onClose);
     if (!res.headersSent && !res.destroyed) {
-      log.warn(`Remote ${info.serverHost} nicht erreichbar, nutze lokale Kopie: ${describeError(error)}`);
+      log.warn(`Remote ${info.serverHost} unreachable, using local copy: ${describeError(error)}`);
       deps.passThrough(req, res);
     }
     return true;
@@ -187,7 +187,7 @@ export async function handleIntercept(
   if (!(response.ok || response.status === 206 || response.status === 416 || response.status === 304)) {
     await response.body?.cancel().catch(() => {});
     res.off('close', onClose);
-    log.warn(`Remote ${redactUrl(url.toString())} -> ${response.status}, nutze lokale Kopie`);
+    log.warn(`Remote ${redactUrl(url.toString())} -> ${response.status}, using local copy`);
     deps.passThrough(req, res);
     return true;
   }
@@ -226,7 +226,7 @@ export async function handleIntercept(
   const body = Readable.fromWeb(response.body as any);
   body.on('error', (error) => {
     if (!controller.signal.aborted) {
-      log.debug(`Remote-Stream abgebrochen: ${error.message}`);
+      log.debug(`Remote stream aborted: ${error.message}`);
     }
     res.destroy();
   });

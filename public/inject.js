@@ -1,17 +1,19 @@
 /*
  * immich-federation – inject.js
- * Wird vom Gateway in die HTML-Antworten der (unveränderten) Immich-Web-App eingefügt.
- * Vanilla JS, keine Abhängigkeiten. Alles ist defensiv: Fehlt ein Anker im DOM (z. B. nach einem
- * Immich-Update), wird die jeweilige Erweiterung einfach still übersprungen.
+ * Injected by the gateway into the HTML responses of the (unmodified) Immich web app.
+ * Vanilla JS, no dependencies. Everything is defensive: if a DOM anchor is missing (e.g. after an
+ * Immich update), the respective extension is silently skipped.
+ * Texts come from i18n.js (window.__ifedI18n, loaded before this file) and follow the Immich language setting.
+ * All anchors are structural (ids, hrefs, icon paths) – never Immich's own (translated) UI texts.
  *
- * Anker (verifiziert gegen Immich v3.3.0, web/src):
+ * Anchors (verified against Immich v3.3.0, web/src):
  *  - Sidebar:      nav#sidebar  > div  >  …a[href="/sharing"]          (UserSidebar.svelte, Sidebar.svelte)
- *  - Konto-Menü:   #account-info-panel a[href="/user-settings"]          (AccountInfoPanel.svelte)
- *  - Albenliste:   Button mit <path d=mdiPlusBoxOutline> in <main>       (albums/AlbumsControls.svelte)
- *                  Fallback: #user-page-header → Kopfzeile               (layouts/UserPageLayout.svelte)
- *  - Albumkarten:  a[href="/albums/<id>"] [data-testid="album-details"]  (album-page/AlbumCard.svelte)
- *  - Albumseite:   #virtual-timeline > section > section (Titelbereich)  (timeline/Timeline.svelte, albums/[albumId]/…/+page.svelte)
- *  - Asset-Viewer: #immich-asset-viewer, #detail-panel                  (asset-viewer/AssetViewer.svelte, DetailPanel.svelte)
+ *  - Account menu: #account-info-panel a[href="/user-settings"]          (AccountInfoPanel.svelte)
+ *  - Album list:   button with <path d=mdiPlusBoxOutline> in <main>      (albums/AlbumsControls.svelte)
+ *                  fallback: #user-page-header → header bar              (layouts/UserPageLayout.svelte)
+ *  - Album cards:  a[href="/albums/<id>"] [data-testid="album-details"]  (album-page/AlbumCard.svelte)
+ *  - Album page:   #virtual-timeline > section > section (title area)    (timeline/Timeline.svelte, albums/[albumId]/…/+page.svelte)
+ *  - Asset viewer: #immich-asset-viewer, #detail-panel                  (asset-viewer/AssetViewer.svelte, DetailPanel.svelte)
  */
 (function () {
   'use strict';
@@ -19,7 +21,7 @@
   if (window.__immichFederation) return;
 
   // ---------------------------------------------------------------------------------------------
-  // Grundlagen
+  // Basics
   // ---------------------------------------------------------------------------------------------
 
   var BASE = (function () {
@@ -39,6 +41,14 @@
   var RE_ALBUMS = /^\/albums\/?$/;
   var RE_ALBUM = new RegExp('^/albums/(' + UUID + ')(?:/|$)');
   var RE_ASSET = new RegExp('/photos/(' + UUID + ')/?$');
+
+  /** i18n.js (window.__ifedI18n) – normally loaded before this script; see boot at the end of the file. */
+  function I() {
+    return window.__ifedI18n;
+  }
+  function t(key, params) {
+    return I().t(key, params);
+  }
 
   var ICON = {
     plusBox:
@@ -69,10 +79,10 @@
     };
   }
 
-  /** Fehlende DOM-Anker einmalig melden (nur mit localStorage ifed-debug=1), für diagnose() merken. */
+  /** Report missing DOM anchors once (only with localStorage ifed-debug=1), remember them for diagnose(). */
   var missingSeen = {};
   function missing(name) {
-    if (!missingSeen[name] && safeGet('ifed-debug')) console.info('[immich-federation] Anker fehlt: ' + name);
+    if (!missingSeen[name] && safeGet('ifed-debug')) console.info('[immich-federation] anchor missing: ' + name);
     missingSeen[name] = true;
   }
 
@@ -84,7 +94,7 @@
     }
   }
 
-  /** Kleiner DOM-Builder. Texte immer über textContent (Albumnamen etc. kommen von fremden Servern). */
+  /** Small DOM builder. Texts always via textContent (album names etc. come from foreign servers). */
   function h(tag, attrs, children) {
     var el = document.createElement(tag);
     if (attrs) {
@@ -131,8 +141,8 @@
   }
 
   function errorMessage(res) {
-    if (!res) return 'Unbekannter Fehler';
-    if (res.status === 401) return 'Bitte in Immich anmelden.';
+    if (!res) return t('error.unknown');
+    if (res.status === 401) return t('error.login');
     var d = res.data;
     if (d && typeof d === 'object') {
       var m = d.message || d.error;
@@ -140,25 +150,26 @@
       if (m) return String(m);
     }
     if (typeof d === 'string' && d && d.length < 300) return d;
-    if (res.status === 0) return 'Gateway nicht erreichbar.';
-    return 'Fehler (HTTP ' + res.status + ')';
+    if (res.status === 0) return t('error.unreachable');
+    return t('error.http', { status: res.status });
   }
 
   function api(method, path, body) {
-    var opts = { method: method, credentials: 'same-origin', headers: { Accept: 'application/json' } };
+    // X-Federation-Lang: the gateway localizes error messages and stored texts (sync errors) accordingly
+    var opts = { method: method, credentials: 'same-origin', headers: { Accept: 'application/json', 'X-Federation-Lang': I().lang() } };
     if (body !== undefined) {
       opts.headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(body);
     }
     return fetch(API + path, opts).then(
       function (r) {
-        return r.text().then(function (t) {
+        return r.text().then(function (txt) {
           var data = null;
-          if (t) {
+          if (txt) {
             try {
-              data = JSON.parse(t);
+              data = JSON.parse(txt);
             } catch (e) {
-              data = t;
+              data = txt;
             }
           }
           return { ok: r.ok, status: r.status, data: data };
@@ -170,37 +181,15 @@
     );
   }
 
-  var rtf = (function () {
-    try {
-      return new Intl.RelativeTimeFormat('de', { numeric: 'auto' });
-    } catch (e) {
-      return null;
-    }
-  })();
-
   function relTime(iso) {
-    if (!iso) return null;
-    var t = new Date(iso).getTime();
-    if (!isFinite(t)) return null;
-    var diff = (t - Date.now()) / 1000;
-    var abs = Math.abs(diff);
-    if (abs < 45) return 'gerade eben';
-    if (!rtf) return new Date(t).toLocaleString('de-DE');
-    if (abs < 3600) return rtf.format(Math.round(diff / 60), 'minute');
-    if (abs < 86400) return rtf.format(Math.round(diff / 3600), 'hour');
-    if (abs < 86400 * 30) return rtf.format(Math.round(diff / 86400), 'day');
-    return new Date(t).toLocaleDateString('de-DE', { day: 'numeric', month: 'long', year: 'numeric' });
+    return I().relativeTime(iso);
   }
 
   function absTime(iso) {
-    try {
-      return new Date(iso).toLocaleString('de-DE');
-    } catch (e) {
-      return '';
-    }
+    return I().formatDateTime(iso);
   }
 
-  /** SPA-Navigation über den SvelteKit-Router (klickt einen temporären Link), Fallback: harte Navigation. */
+  /** SPA navigation via the SvelteKit router (clicks a temporary link), fallback: hard navigation. */
   function spaNavigate(href) {
     try {
       var a = document.createElement('a');
@@ -219,7 +208,7 @@
   }
 
   // ---------------------------------------------------------------------------------------------
-  // Daten-Caches
+  // Data caches
   // ---------------------------------------------------------------------------------------------
 
   var linksCache = { at: 0, promise: null, data: null };
@@ -233,7 +222,7 @@
         linksCache.data = res.data;
         return res.data;
       }
-      // Bei Fehler nicht lange cachen
+      // On error, don't cache for long
       linksCache.at = 0;
       return linksCache.data || [];
     });
@@ -249,7 +238,7 @@
     var entry = { at: now, ttl: 5 * 60 * 1000, promise: null };
     entry.promise = api('GET', '/assets/' + encodeURIComponent(id)).then(function (res) {
       if (res.ok && res.data && res.data.federated) return res.data;
-      if (res.status !== 404) entry.ttl = 30 * 1000; // Netzwerk-/Serverfehler: bald erneut versuchen
+      if (res.status !== 404) entry.ttl = 30 * 1000; // network/server error: retry soon
       return null;
     });
     assetCache.set(id, entry);
@@ -258,7 +247,7 @@
   }
 
   // ---------------------------------------------------------------------------------------------
-  // CSS (einmalig, Präfix ifed-). Farben über Immich-UI-Variablen → folgt automatisch hell/dunkel.
+  // CSS (once, prefix ifed-). Colors via Immich UI variables → follows light/dark automatically.
   // ---------------------------------------------------------------------------------------------
 
   var CSS = [
@@ -279,7 +268,7 @@
     '.ifed-btn-danger{color:var(--ifed-danger)}.ifed-btn-danger:hover:not(:disabled){background:color-mix(in oklab,var(--ifed-danger) 14%,transparent)}',
     '.ifed-btn-danger-filled{background:var(--ifed-danger);color:#fff}.ifed-btn-danger-filled:hover:not(:disabled){background:color-mix(in oklab,var(--ifed-danger) 85%,#000)}',
     '.ifed-icon-btn{padding:.4rem;border-radius:9999px}',
-    // Banner (Albumseite)
+    // Banner (album page)
     '.ifed-banner{display:flex;flex-wrap:wrap;align-items:center;gap:.75rem 1rem;margin:.75rem 0 .5rem;padding:.75rem 1rem;border-radius:1rem;border:1px solid var(--ifed-border);background:color-mix(in oklab,var(--ifed-primary) 7%,var(--ifed-bg));color:var(--ifed-fg);font-size:.875rem}',
     '.ifed-banner-main{display:flex;align-items:flex-start;gap:.75rem;flex:1 1 18rem;min-width:0}',
     '.ifed-banner-icon{color:var(--ifed-primary);flex:none;margin-top:.1rem}',
@@ -295,7 +284,7 @@
     // Chips
     '[data-ifed=card-chip]{margin-top:.35rem;max-width:100%;overflow:hidden;text-overflow:ellipsis}',
     '.ifed-chip{display:inline-flex;align-items:center;gap:.25rem;padding:.05rem .45rem;border-radius:9999px;font-size:.75rem;font-weight:500;background:color-mix(in oklab,var(--ifed-primary) 14%,transparent);color:var(--ifed-primary);white-space:nowrap}',
-    // Asset-Badge
+    // Asset badge
     '.ifed-asset-badge{display:flex;align-items:flex-start;gap:.6rem;margin:.5rem 1rem 0;padding:.6rem .8rem;border-radius:.75rem;font-size:.8125rem;line-height:1.15rem;background:color-mix(in oklab,var(--ifed-primary) 10%,transparent);color:var(--ifed-fg)}',
     '.ifed-asset-badge svg{color:var(--ifed-primary);flex:none;margin-top:.05rem}',
     '.ifed-asset-badge b{font-weight:600;overflow-wrap:anywhere}',
@@ -333,7 +322,7 @@
   }
 
   // ---------------------------------------------------------------------------------------------
-  // d) Sidebar-Eintrag + Konto-Menü-Link
+  // d) Sidebar entry + account menu link
   // ---------------------------------------------------------------------------------------------
 
   var ensureSidebar = safe(function () {
@@ -347,8 +336,8 @@
       nav.querySelector('a[href="/albums"]') ||
       nav.querySelector('a[href="/photos"]');
     var existing = nav.querySelector('[data-ifed="sidebar"]');
-    // Seiten mit eigener Sidebar (Ordner-/Tag-Explorer unter /folders, /tags) haben keine Navigationslinks →
-    // dort keinen Eintrag einfügen (das Konto-Menü bietet weiterhin den Link).
+    // Pages with their own sidebar (folder/tag explorer under /folders, /tags) have no navigation links →
+    // don't insert an entry there (the account menu still offers the link).
     if (!ref) {
       if (existing) existing.remove();
       missing('sidebar');
@@ -363,7 +352,7 @@
     var refItem = ref;
     while (refItem && refItem.parentElement !== container) refItem = refItem.parentElement;
 
-    // Klassen des echten Navbar-Eintrags übernehmen (aktiv-Zustand entfernen) → identisches Aussehen
+    // Copy the classes of the real navbar entry (minus the active state) → identical look
     var linkClass = ref
       ? ref.className
           .split(/\s+/)
@@ -385,9 +374,9 @@
             'data-sveltekit-reload': '',
             class: 'ifed-sidebar-link ' + linkClass + (active ? ' bg-primary/10 text-primary' : ''),
             draggable: 'false',
-            title: 'Föderierte Alben verwalten',
+            title: t('nav.manageTitle'),
           },
-          [h('div', { class: innerClass }, [svg(ICON.earth, '1.375em', 'shrink-0'), h('span', { class: 'truncate text-sm font-medium', text: 'Föderation' })])],
+          [h('div', { class: innerClass }, [svg(ICON.earth, '1.375em', 'shrink-0'), h('span', { class: 'truncate text-sm font-medium', text: t('common.federation') })])],
         ),
       ]),
     ]);
@@ -407,7 +396,7 @@
       [
         h('div', { class: 'flex place-content-center place-items-center gap-2 px-2 text-center' }, [
           svg(ICON.earth, '18'),
-          'Föderation',
+          t('common.federation'),
         ]),
       ],
     );
@@ -415,7 +404,7 @@
   });
 
   // ---------------------------------------------------------------------------------------------
-  // a) Albenliste: Button "Föderiertes Album verbinden" + Kennzeichnung föderierter Alben
+  // a) Album list: "Connect federated album" button + marking of federated albums
   // ---------------------------------------------------------------------------------------------
 
   function findCreateAlbumButton() {
@@ -439,7 +428,7 @@
       before = createBtn.nextSibling;
       cls = createBtn.className;
     } else {
-      // Fallback: Kopfzeile der Seite (UserPageLayout, #user-page-header)
+      // Fallback: the page's header bar (UserPageLayout, #user-page-header)
       var header = document.getElementById('user-page-header');
       var bar = header && header.closest('div.absolute');
       if (!bar) return missing('albums-button');
@@ -454,13 +443,13 @@
         type: 'button',
         class: cls,
         'data-ifed': 'connect-btn',
-        title: 'Föderiertes Album verbinden',
-        'aria-label': 'Föderiertes Album verbinden',
+        title: t('connect.title'),
+        'aria-label': t('connect.title'),
         onclick: function (e) {
           openConnectModal(e.currentTarget);
         },
       },
-      [h('div', null, [svg(ICON.earthPlus, '1rem', 'h-4 w-4')]), h('p', { class: 'hidden md:block', text: 'Föderiertes Album verbinden' })],
+      [h('div', null, [svg(ICON.earthPlus, '1rem', 'h-4 w-4')]), h('p', { class: 'hidden md:block', text: t('connect.title') })],
     );
     parent.insertBefore(btn, before);
   });
@@ -482,9 +471,9 @@
       var l = byAlbum[m[1]];
       // below the "N items" row (inside it the chip overflows narrow cards)
       details.parentElement.insertBefore(
-        h('span', { class: 'ifed-chip', 'data-ifed': 'card-chip', title: 'Föderiert von ' + (l.serverHost || '') }, [
+        h('span', { class: 'ifed-chip', 'data-ifed': 'card-chip', title: t('albums.federatedFrom', { host: l.serverHost || '' }) }, [
           svg(ICON.earth, '0.9em'),
-          l.serverHost || 'Föderiert',
+          l.serverHost || t('albums.federated'),
         ]),
         details.nextSibling,
       );
@@ -492,7 +481,7 @@
   });
 
   // ---------------------------------------------------------------------------------------------
-  // Modal "Föderiertes Album verbinden"
+  // Modal "Connect federated album"
   // ---------------------------------------------------------------------------------------------
 
   var modalState = null;
@@ -536,20 +525,20 @@
       autocomplete: 'off',
       spellcheck: 'false',
       required: true,
-      placeholder: 'https://fotos.example.org/share/…',
+      placeholder: t('connect.placeholder'),
       'aria-describedby': 'ifed-share-hint',
     });
     var toggle = h('input', { id: 'ifed-show-timeline', class: 'ifed-switch', type: 'checkbox', role: 'switch' });
     var videoToggle = h('input', { id: 'ifed-import-videos', class: 'ifed-switch', type: 'checkbox', role: 'switch', checked: true });
-    var cancelBtn = h('button', { type: 'button', class: 'ifed-btn ifed-btn-outline', text: 'Abbrechen', onclick: closeModal });
-    var submitBtn = h('button', { type: 'submit', class: 'ifed-btn ifed-btn-primary' }, [svg(ICON.earthPlus, '1rem'), 'Verbinden']);
-    var closeBtn = h('button', { type: 'button', class: 'ifed-btn ifed-icon-btn', 'aria-label': 'Schließen', title: 'Schließen', onclick: closeModal }, [
+    var cancelBtn = h('button', { type: 'button', class: 'ifed-btn ifed-btn-outline', text: t('common.cancel'), onclick: closeModal });
+    var submitBtn = h('button', { type: 'submit', class: 'ifed-btn ifed-btn-primary' }, [svg(ICON.earthPlus, '1rem'), t('common.connect')]);
+    var closeBtn = h('button', { type: 'button', class: 'ifed-btn ifed-icon-btn', 'aria-label': t('common.close'), title: t('common.close'), onclick: closeModal }, [
       svg(ICON.close, '1.25rem'),
     ]);
 
     function showError(msg, login) {
       errorBox.textContent = '';
-      append(errorBox, [svg(ICON.alert, '1.1rem'), h('span', null, [msg, login ? ' ' : null, login ? h('a', { href: '/auth/login?continue=' + encodeURIComponent(location.pathname), text: 'Zur Anmeldung' }) : null])]);
+      append(errorBox, [svg(ICON.alert, '1.1rem'), h('span', null, [msg, login ? ' ' : null, login ? h('a', { href: '/auth/login?continue=' + encodeURIComponent(location.pathname), text: t('common.toLogin') }) : null])]);
       errorBox.hidden = false;
     }
 
@@ -561,7 +550,7 @@
       toggle.disabled = b;
       videoToggle.disabled = b;
       submitBtn.textContent = '';
-      append(submitBtn, b ? [svg(ICON.sync, '1rem', 'ifed-spin'), 'Verbinde …'] : [svg(ICON.earthPlus, '1rem'), 'Verbinden']);
+      append(submitBtn, b ? [svg(ICON.sync, '1rem', 'ifed-spin'), t('common.connecting')] : [svg(ICON.earthPlus, '1rem'), t('common.connect')]);
     }
 
     var form = h(
@@ -580,12 +569,12 @@
             parsed = null;
           }
           if (!parsed || !/^https?:$/.test(parsed.protocol)) {
-            showError('Bitte einen vollständigen Freigabe-Link einfügen (beginnt mit https:// oder http://).');
+            showError(t('connect.invalidUrl'));
             input.focus();
             return;
           }
           if (!/\/(share|s)\/[^/]+/.test(parsed.pathname)) {
-            showError('Das sieht nicht nach einem Immich-Freigabe-Link aus. Erwartet wird …/share/<Schlüssel> oder …/s/<Name>.');
+            showError(t('connect.notShareLink'));
             input.focus();
             return;
           }
@@ -608,27 +597,27 @@
         h('div', { class: 'ifed-modal-body' }, [
           h('p', {
             id: 'ifed-modal-desc',
-            text: 'Füge den Freigabe-Link eines Albums von einem anderen Immich-Server ein. Vorschaubilder, Metadaten und Suchindizes werden lokal angelegt; Originale werden erst beim Öffnen vom anderen Server geladen.',
+            text: t('connect.description'),
           }),
           h('div', null, [
-            h('label', { class: 'ifed-label', for: 'ifed-share-url', text: 'Freigabe-Link' }),
+            h('label', { class: 'ifed-label', for: 'ifed-share-url', text: t('connect.shareLink') }),
             input,
-            h('div', { id: 'ifed-share-hint', class: 'ifed-hint', text: 'Den Link erstellt die andere Person in ihrem Immich unter „Album teilen → Link erstellen“.' }),
+            h('div', { id: 'ifed-share-hint', class: 'ifed-hint', text: t('connect.shareHint') }),
           ]),
           h('div', { class: 'ifed-row' }, [
             h('label', { for: 'ifed-show-timeline', style: { cursor: 'pointer' } }, [
-              h('div', { style: { fontWeight: '500' }, text: 'In Zeitleiste anzeigen' }),
-              h('div', { class: 'ifed-hint', style: { marginTop: '0' }, text: 'Aus: Fotos erscheinen nur im Album (archiviert).' }),
+              h('div', { style: { fontWeight: '500' }, text: t('connect.showInTimeline') }),
+              h('div', { class: 'ifed-hint', style: { marginTop: '0' }, text: t('connect.showInTimelineHint') }),
             ]),
             toggle,
           ]),
           h('div', { class: 'ifed-row' }, [
             h('label', { for: 'ifed-import-videos', style: { cursor: 'pointer' } }, [
-              h('div', { style: { fontWeight: '500' }, text: 'Videos importieren' }),
+              h('div', { style: { fontWeight: '500' }, text: t('connect.importVideos') }),
               h('div', {
                 class: 'ifed-hint',
                 style: { marginTop: '0' },
-                text: 'Dafür wird jedes Video einmal ganz geladen und verkleinert. Aus: nur Fotos.',
+                text: t('connect.importVideosHint'),
               }),
             ]),
             videoToggle,
@@ -640,7 +629,7 @@
     );
 
     var dialog = h('div', { class: 'ifed-modal', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'ifed-modal-title', 'aria-describedby': 'ifed-modal-desc' }, [
-      h('div', { class: 'ifed-modal-head' }, [h('h2', { id: 'ifed-modal-title', text: 'Föderiertes Album verbinden' }), closeBtn]),
+      h('div', { class: 'ifed-modal-head' }, [h('h2', { id: 'ifed-modal-title', text: t('connect.title') }), closeBtn]),
       form,
     ]);
 
@@ -648,7 +637,7 @@
     overlay.addEventListener('mousedown', function (e) {
       if (e.target === overlay && !busy) closeModal();
     });
-    // Tastaturereignisse nicht an Immichs globale Shortcuts weiterreichen
+    // Don't pass keyboard events on to Immich's global shortcuts
     overlay.addEventListener('keydown', function (e) {
       e.stopPropagation();
     });
@@ -695,7 +684,7 @@
   }
 
   // ---------------------------------------------------------------------------------------------
-  // b) Banner auf der Albumseite
+  // b) Banner on the album page
   // ---------------------------------------------------------------------------------------------
 
   var banner = { albumId: null, link: null, el: null, timer: null, confirming: false, busy: false, msg: null, wasEmpty: false, startCount: null };
@@ -722,7 +711,7 @@
     var anchor = findAlbumAnchor();
     if (!anchor) return;
     if (banner.el.parentElement === anchor.parent) {
-      // Bereits drin – beim Anhängen sicherstellen, dass er hinter Svelte-Inhalt bleibt ist nicht nötig
+      // Already in place – no need to keep it behind Svelte content when appending
       return;
     }
     if (anchor.mode === 'append') anchor.parent.appendChild(banner.el);
@@ -755,16 +744,16 @@
           return;
         }
         if (banner.startCount === null) banner.startCount = link.assetCount;
-        // Sync gerade fertig geworden → Ansicht ggf. aktualisieren
+        // Sync just finished → refresh the view if needed
         if (prev && prev.syncing && !link.syncing) {
           var changed = link.assetCount !== banner.startCount;
           if (changed && document.getElementById('empty-album') && !modalState && !banner.confirming) {
             location.reload();
             return;
           }
-          if (changed) banner.msg = { kind: 'reload', text: 'Synchronisierung abgeschlossen.' };
+          if (changed) banner.msg = { kind: 'reload', key: 'banner.syncDone' };
         }
-        // Während der Trennen-Bestätigung nicht neu zeichnen (Fokus/Checkbox bleiben erhalten)
+        // Don't re-render during the disconnect confirmation (keeps focus/checkbox)
         if (!banner.confirming || !banner.el) renderBanner();
         schedulePoll();
       }),
@@ -775,7 +764,7 @@
     var l = banner.link;
     if (!l) return;
     if (!banner.el) {
-      banner.el = h('div', { class: 'ifed-banner', 'data-ifed': 'banner', role: 'region', 'aria-label': 'Föderiertes Album' });
+      banner.el = h('div', { class: 'ifed-banner', 'data-ifed': 'banner', role: 'region', 'aria-label': t('banner.label') });
       banner.el.addEventListener('keydown', onBannerKey);
     }
     var el = banner.el;
@@ -787,33 +776,32 @@
       meta.push(
         h('span', { class: 'ifed-chip' }, [
           svg(ICON.sync, '0.9em', 'ifed-spin'),
-          p && p.total ? 'Synchronisiere … ' + p.done + ' / ' + p.total : 'Synchronisiere …',
+          p && p.total ? t('common.syncingProgress', { done: I().formatNumber(p.done), total: I().formatNumber(p.total) }) : t('common.syncing'),
         ]),
       );
     } else if (l.lastSyncedAt) {
-      meta.push(h('span', { title: absTime(l.lastSyncedAt), text: 'zuletzt synchronisiert ' + relTime(l.lastSyncedAt) }));
+      meta.push(h('span', { title: absTime(l.lastSyncedAt), text: t('banner.lastSynced', { time: relTime(l.lastSyncedAt) }) }));
     } else {
-      meta.push(h('span', { text: 'noch nicht synchronisiert' }));
+      meta.push(h('span', { text: t('banner.neverSynced') }));
     }
     if (typeof l.assetCount === 'number') {
       meta.push(h('span', { class: 'ifed-sep', text: '·', 'aria-hidden': 'true' }));
-      meta.push(h('span', { text: l.assetCount + (l.assetCount === 1 ? ' Eintrag' : ' Einträge') }));
+      meta.push(h('span', { text: t('banner.items', { count: l.assetCount }) }));
     }
     if (l.importVideos === false) {
       meta.push(h('span', { class: 'ifed-sep', text: '·', 'aria-hidden': 'true' }));
-      meta.push(h('span', { text: 'ohne Videos' }));
+      meta.push(h('span', { text: t('banner.noVideos') }));
     }
     if (l.allowDownload === false) {
       meta.push(h('span', { class: 'ifed-sep', text: '·', 'aria-hidden': 'true' }));
-      meta.push(h('span', { title: 'Der andere Server erlaubt keinen Download – es wird die lokale Vorschau angezeigt.', text: 'Originale nicht freigegeben' }));
+      meta.push(h('span', { title: t('banner.originalsBlockedTitle'), text: t('banner.originalsBlocked') }));
     }
 
     var main = h('div', { class: 'ifed-banner-main' }, [
       svg(ICON.earth, '1.5rem', 'ifed-banner-icon'),
       h('div', { style: { minWidth: '0' } }, [
         h('div', { class: 'ifed-banner-title' }, [
-          'Föderiert von ',
-          h('b', { text: l.serverHost || 'unbekanntem Server' }),
+          I().parts('banner.federatedFrom', { host: h('b', { text: l.serverHost || t('banner.unknownServer') }) }),
           l.remoteOwnerName ? ' (' + l.remoteOwnerName + ')' : null,
         ]),
         h('div', { class: 'ifed-banner-meta', 'aria-live': 'polite' }, meta),
@@ -821,19 +809,19 @@
           ? h('div', {
               class: 'ifed-hint',
               style: { marginTop: '.2rem' },
-              text: 'Hinweis: Ein ZIP-Download (ganzes Album oder Mehrfachauswahl) enthält nur die lokalen Vorschau-Kopien – Originale einzeln herunterladen.',
+              text: t('banner.zipHint'),
             })
           : null,
         l.lastError && !l.syncing
-          ? h('div', { class: 'ifed-err', style: { marginTop: '.25rem' } }, ['Fehler bei der letzten Synchronisierung: ', String(l.lastError)])
+          ? h('div', { class: 'ifed-err', style: { marginTop: '.25rem' }, text: t('banner.lastSyncError', { error: String(l.lastError) }) })
           : null,
         banner.msg && banner.msg.kind === 'error' ? h('div', { class: 'ifed-err', role: 'alert', style: { marginTop: '.25rem' }, text: banner.msg.text }) : null,
         banner.msg && banner.msg.kind === 'reload'
           ? h('div', { class: 'ifed-ok', style: { marginTop: '.25rem', display: 'flex', alignItems: 'center', gap: '.5rem', flexWrap: 'wrap' } }, [
-              banner.msg.text,
+              t(banner.msg.key),
               h('button', { type: 'button', class: 'ifed-btn ifed-btn-outline', style: { padding: '.15rem .6rem' }, onclick: function () { location.reload(); } }, [
                 svg(ICON.refresh, '1em'),
-                'Ansicht aktualisieren',
+                t('banner.refreshView'),
               ]),
             ])
           : null,
@@ -851,7 +839,7 @@
             syncNow();
           },
         },
-        [svg(ICON.sync, '1.1em', l.syncing ? 'ifed-spin' : null), 'Jetzt synchronisieren'],
+        [svg(ICON.sync, '1.1em', l.syncing ? 'ifed-spin' : null), t('common.syncNow')],
       ),
       h(
         'button',
@@ -868,9 +856,9 @@
             if (c) c.focus();
           },
         },
-        [svg(ICON.linkOff, '1.1em'), 'Trennen'],
+        [svg(ICON.linkOff, '1.1em'), t('common.disconnect')],
       ),
-      h('a', { class: 'ifed-btn', href: BASE + '/', 'data-sveltekit-reload': '', title: 'Föderation verwalten' }, [svg(ICON.cog, '1.1em'), h('span', { text: 'Verwalten' })]),
+      h('a', { class: 'ifed-btn', href: BASE + '/', 'data-sveltekit-reload': '', title: t('banner.manageTitle') }, [svg(ICON.cog, '1.1em'), h('span', { text: t('banner.manage') })]),
     ]);
 
     append(el, [main, banner.confirming ? null : actions]);
@@ -885,14 +873,14 @@
       });
       append(
         el,
-        h('div', { class: 'ifed-confirm', role: 'group', 'aria-label': 'Trennen bestätigen' }, [
-          h('span', { style: { fontWeight: '500' }, text: 'Verbindung zu ' + (l.serverHost || 'diesem Server') + ' wirklich trennen?' }),
-          h('label', { class: 'ifed-check' }, [del, 'Album und lokale Kopien löschen']),
+        h('div', { class: 'ifed-confirm', role: 'group', 'aria-label': t('common.confirmDisconnect') }, [
+          h('span', { style: { fontWeight: '500' }, text: t('banner.confirmQuestion', { host: l.serverHost || t('common.thisServer') }) }),
+          h('label', { class: 'ifed-check' }, [del, t('banner.deleteLocal')]),
           h('span', { style: { flex: '1' } }),
           h('button', {
             type: 'button',
             class: 'ifed-btn ifed-btn-outline',
-            text: 'Abbrechen',
+            text: t('common.cancel'),
             disabled: banner.busy,
             onclick: function () {
               banner.confirming = false;
@@ -910,7 +898,7 @@
                 disconnect(!!del.checked);
               },
             },
-            banner.busy ? [svg(ICON.sync, '1em', 'ifed-spin'), 'Trenne …'] : [svg(ICON.linkOff, '1em'), 'Trennen'],
+            banner.busy ? [svg(ICON.sync, '1em', 'ifed-spin'), t('common.disconnecting')] : [svg(ICON.linkOff, '1em'), t('common.disconnect')],
           ),
         ]),
       );
@@ -979,7 +967,7 @@
   });
 
   // ---------------------------------------------------------------------------------------------
-  // c) Badge im Asset-Viewer
+  // c) Badge in the asset viewer
   // ---------------------------------------------------------------------------------------------
 
   var assetBadge = { id: null, info: undefined, panelEl: null, floatEl: null };
@@ -996,25 +984,21 @@
     var viewer = document.getElementById('immich-asset-viewer');
     if (!viewer) return;
     var panel = document.getElementById('detail-panel');
-    // Nur das Info-Panel verwenden (DetailPanel.svelte: <section class="relative p-2">), nicht den Editor
-    // (section.h-full) und nicht das Gesichter-Panel (section.absolute)
+    // Only use the info panel (DetailPanel.svelte: <section class="relative p-2">), not the editor
+    // (section.h-full) and not the faces panel (section.absolute)
     var panelSection = panel && panel.querySelector(':scope > section.relative:not(.h-full):not(.absolute)');
     var header = panelSection && panelSection.firstElementChild;
-    var host = info.serverHost || 'einem anderen Server';
+    var host = info.serverHost || t('asset.anotherServer');
 
     if (header) {
       if (!assetBadge.panelEl) {
         assetBadge.panelEl = h('div', { class: 'ifed-asset-badge', 'data-ifed': 'asset-badge', role: 'note' }, [
           svg(ICON.earth, '1.25rem'),
           h('div', { style: { minWidth: '0' } }, [
-            'Original liegt auf ',
-            h('b', { text: host }),
-            info.remoteOwnerName ? h('small', { text: 'Geteilt von ' + info.remoteOwnerName }) : null,
+            I().parts('asset.originalOn', { host: h('b', { text: host }) }),
+            info.remoteOwnerName ? h('small', { text: t('asset.sharedBy', { name: info.remoteOwnerName }) }) : null,
             h('small', {
-              text:
-                info.allowDownload === false
-                  ? 'Download nicht freigegeben – angezeigt wird die lokale Vorschau.'
-                  : 'Vorschau, Metadaten und Suche sind lokal; das Original wird bei Bedarf geladen.',
+              text: info.allowDownload === false ? t('asset.downloadBlocked') : t('asset.localInfo'),
             }),
           ]),
         ]);
@@ -1030,7 +1014,7 @@
       if (!assetBadge.floatEl) {
         assetBadge.floatEl = h('div', { class: 'ifed-asset-float', 'data-ifed': 'asset-float', role: 'note' }, [
           svg(ICON.earth, '1em'),
-          h('span', { text: 'Original liegt auf ' + host }),
+          h('span', { text: t('asset.originalOn', { host: host }) }),
         ]);
       }
       if (assetBadge.floatEl.parentElement !== viewer) viewer.appendChild(assetBadge.floatEl);
@@ -1054,15 +1038,36 @@
   });
 
   // ---------------------------------------------------------------------------------------------
-  // Haupt-Schleife: Routing + DOM-Beobachtung
+  // Main loop: routing + DOM observation
   // ---------------------------------------------------------------------------------------------
 
   var lastPath = null;
+  var lastLang = null;
+
+  /** The Immich language changed at runtime → rebuild every injected element with the new texts. */
+  function relocalize() {
+    var els = document.querySelectorAll('[data-ifed="sidebar"],[data-ifed="account"],[data-ifed="connect-btn"],[data-ifed="card-chip"]');
+    for (var i = 0; i < els.length; i++) els[i].remove();
+    if (banner.el && banner.link) renderBanner();
+    if (assetBadge.panelEl) assetBadge.panelEl.remove();
+    if (assetBadge.floatEl) assetBadge.floatEl.remove();
+    assetBadge.panelEl = null;
+    assetBadge.floatEl = null;
+    if (assetBadge.info) placeAssetBadge();
+    if (modalState) closeModal();
+  }
 
   var run = safe(function () {
+    if (!I()) return; // i18n.js not loaded (yet)
     ensureStyle();
+    // Resolved lazily on every pass (cheap, cached in i18n.js): follows a language change in Immich's settings
+    var lang = I().lang();
+    if (lang !== lastLang) {
+      if (lastLang !== null) relocalize();
+      lastLang = lang;
+    }
     var path = location.pathname;
-    // Auf Login-/Onboarding-Seiten nichts tun
+    // Do nothing on login/onboarding pages
     if (/^\/(auth|share|s)\//.test(path)) {
       resetBanner();
       resetAssetBadge();
@@ -1118,7 +1123,7 @@
   hookHistory('replaceState');
   window.addEventListener('popstate', schedule);
 
-  // Banner-Zeitangabe ("vor 3 Minuten") aktuell halten
+  // Keep the banner's relative time ("3 minutes ago") up to date
   setInterval(
     safe(function () {
       if (banner.el && banner.link && !banner.link.syncing && !banner.confirming && !banner.busy) renderBanner();
@@ -1129,10 +1134,10 @@
   function start() {
     try {
       var mo = new MutationObserver(function (records) {
-        // Eigene Änderungen ignorieren, um Schleifen zu vermeiden
+        // Ignore our own changes to avoid loops
         for (var i = 0; i < records.length; i++) {
-          var t = records[i].target;
-          if (!(t && t.closest && t.closest('[data-ifed]'))) {
+          var target = records[i].target;
+          if (!(target && target.closest && target.closest('[data-ifed]'))) {
             schedule();
             return;
           }
@@ -1153,11 +1158,11 @@
       schedule();
     },
     openConnect: function () {
-      openConnectModal(null);
+      if (I()) openConnectModal(null);
     },
     /**
-     * Prüft nach einem Immich-Update, welche DOM-Anker auf der AKTUELLEN Seite gefunden werden.
-     * Aufruf in der Browser-Konsole: __immichFederation.diagnose()
+     * After an Immich update, checks which DOM anchors are found on the CURRENT page.
+     * Call in the browser console: __immichFederation.diagnose()
      */
     diagnose: function () {
       var q = function (sel) {
@@ -1171,25 +1176,26 @@
       var r = {
         path: path,
         'sidebar (nav#sidebar + a[href=/sharing|/albums])': q('nav#sidebar a[href="/sharing"]') || q('nav#sidebar a[href="/albums"]'),
-        'sidebar-eintrag eingefügt': q('[data-ifed="sidebar"]'),
-        'konto-menü (#account-info-panel, nur offen)': q('#account-info-panel a[href^="/user-settings"]'),
+        'sidebar entry inserted': q('[data-ifed="sidebar"]'),
+        'account menu (#account-info-panel, only when open)': q('#account-info-panel a[href^="/user-settings"]'),
       };
       if (RE_ALBUMS.test(path)) {
-        r['alben: erstellen-button (mdiPlusBoxOutline)'] = !!findCreateAlbumButton();
-        r['alben: fallback #user-page-header'] = q('#user-page-header');
-        r['alben: karten [data-testid=album-details]'] = q('main a[href^="/albums/"] [data-testid="album-details"]');
-        r['alben: verbinden-button eingefügt'] = q('[data-ifed="connect-btn"]');
+        r['albums: create button (mdiPlusBoxOutline)'] = !!findCreateAlbumButton();
+        r['albums: fallback #user-page-header'] = q('#user-page-header');
+        r['albums: cards [data-testid=album-details]'] = q('main a[href^="/albums/"] [data-testid="album-details"]');
+        r['albums: connect button inserted'] = q('[data-ifed="connect-btn"]');
       }
       if (RE_ALBUM.test(path)) {
         r['album: #virtual-timeline > section'] = q('#virtual-timeline > section');
-        r['album: banner eingefügt (nur föderierte Alben)'] = q('[data-ifed="banner"]');
+        r['album: banner inserted (federated albums only)'] = q('[data-ifed="banner"]');
       }
       if (RE_ASSET.test(path)) {
         r['viewer: #immich-asset-viewer'] = q('#immich-asset-viewer');
-        r['viewer: #detail-panel > section.relative (nur Info offen)'] = q('#detail-panel > section.relative');
-        r['viewer: badge eingefügt (nur föderierte Assets)'] = q('[data-ifed="asset-badge"]') || q('[data-ifed="asset-float"]');
+        r['viewer: #detail-panel > section.relative (only with info open)'] = q('#detail-panel > section.relative');
+        r['viewer: badge inserted (federated assets only)'] = q('[data-ifed="asset-badge"]') || q('[data-ifed="asset-float"]');
       }
-      r.fehlend = Object.keys(missingSeen);
+      r.lang = I() ? I().lang() : null;
+      r.missing = Object.keys(missingSeen);
       try {
         console.table(r);
       } catch (e) {
@@ -1199,6 +1205,27 @@
     },
   };
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
-  else start();
+  function boot() {
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+    else start();
+    // Language changed in another tab (same tab: the DOM mutations of Immich's re-render trigger run())
+    try {
+      I().onChange(schedule);
+    } catch (e) {
+      /* ignore */
+    }
+  }
+
+  // The gateway injects i18n.js right before this script (both `defer` → executed in document order).
+  // If it is missing anyway (e.g. HTML cached from an older gateway version), load it on demand.
+  if (I()) {
+    boot();
+  } else {
+    var loader = document.createElement('script');
+    loader.src = BASE + '/i18n.js';
+    loader.onload = function () {
+      if (I()) boot();
+    };
+    (document.head || document.documentElement).appendChild(loader);
+  }
 })();

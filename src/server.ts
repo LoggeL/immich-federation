@@ -5,6 +5,7 @@ import type { Config } from './config.ts';
 import { assertWritableDir, resolveSecret, SecretBox } from './crypto.ts';
 import { Store } from './db.ts';
 import { ImmichClient } from './immich.ts';
+import { requestLang, t } from './i18n.ts';
 import { handleIntercept, matchIntercept } from './intercept.ts';
 import { logger, redactUrl } from './log.ts';
 import { TempDir } from './media.ts';
@@ -27,12 +28,12 @@ export async function createGateway(config: Config, { startSync = true } = {}): 
   assertWritableDir(config.dataDir);
   const { secret, generated, fromFile } = resolveSecret(config.federationSecret, config.dataDir);
   if (generated) {
-    log.warn(`FEDERATION_SECRET nicht gesetzt – zufälligen Schlüssel in ${config.dataDir}/secret.key erzeugt`);
+    log.warn(`FEDERATION_SECRET not set – generated a random key in ${config.dataDir}/secret.key`);
   }
   if (fromFile) {
     log.warn(
-      'Schlüssel liegt im selben Volume wie die verschlüsselten Zugangsdaten (secret.key). Für Produktion ' +
-        'FEDERATION_SECRET per Umgebung/Docker-Secret außerhalb des Daten-Volumes setzen.',
+      'The key lives in the same volume as the encrypted credentials (secret.key). For production, set ' +
+        'FEDERATION_SECRET via environment/Docker secret outside the data volume.',
     );
   }
   const box = new SecretBox(secret);
@@ -84,10 +85,10 @@ export async function createGateway(config: Config, { startSync = true } = {}): 
       }
       proxy.web(req, res);
     } catch (error) {
-      log.error(`Fehler bei ${req.method} ${redactUrl(req.url ?? '')}`, error);
+      log.error(`Error handling ${req.method} ${redactUrl(req.url ?? '')}`, error);
       if (!res.headersSent) {
         res.writeHead(500, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ message: 'Gateway-Fehler', statusCode: 500 }));
+        res.end(JSON.stringify({ message: t(requestLang(req.headers), 'gateway_error'), statusCode: 500, code: 'gateway_error' }));
       } else {
         res.destroy();
       }

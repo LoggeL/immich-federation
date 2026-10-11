@@ -1,8 +1,13 @@
-/* immich-federation – Verwaltungsseite /federation/ (Vanilla JS, kein Build-Schritt) */
+/* immich-federation – management page /federation/ (vanilla JS, no build step). Texts via i18n.js (loaded first). */
 (function () {
   'use strict';
 
-  // --- Theme: Immichs gespeicherte Einstellung (localStorage "immich-ui-theme") hat Vorrang ---------
+  var I = window.__ifedI18n;
+  function t(key, params) {
+    return I.t(key, params);
+  }
+
+  // --- Theme: Immich's stored setting (localStorage "immich-ui-theme") takes precedence ------------
   (function applyTheme() {
     var pref = null;
     try {
@@ -15,7 +20,7 @@
     root.classList.remove('dark', 'light');
     if (pref === 'dark') root.classList.add('dark');
     else if (pref === 'light') root.classList.add('light');
-    // "system" / nichts gespeichert → CSS folgt prefers-color-scheme
+    // "system" / nothing stored → CSS follows prefers-color-scheme
   })();
 
   var API = '/federation/api';
@@ -35,7 +40,7 @@
       'M11,15H13V17H11V15M11,7H13V13H11V7M12,2C6.47,2 2,6.5 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,20A8,8 0 0,1 4,12A8,8 0 0,1 12,4A8,8 0 0,1 20,12A8,8 0 0,1 12,20Z',
   };
 
-  // --- Helfer ----------------------------------------------------------------------------------------
+  // --- Helpers ---------------------------------------------------------------------------------------
 
   function $(id) {
     return document.getElementById(id);
@@ -84,19 +89,21 @@
 
   function request(method, url, body) {
     var opts = { method: method, credentials: 'same-origin', headers: { Accept: 'application/json' } };
+    // Gateway API: error messages and stored texts (sync errors) come back in the user's language
+    if (url.indexOf(API + '/') === 0) opts.headers['X-Federation-Lang'] = I.lang();
     if (body !== undefined) {
       opts.headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(body);
     }
     return fetch(url, opts).then(
       function (r) {
-        return r.text().then(function (t) {
+        return r.text().then(function (txt) {
           var data = null;
-          if (t) {
+          if (txt) {
             try {
-              data = JSON.parse(t);
+              data = JSON.parse(txt);
             } catch (e) {
-              data = t;
+              data = txt;
             }
           }
           if (r.status === 401) showLogin();
@@ -110,9 +117,9 @@
   }
 
   function errorMessage(res) {
-    if (!res) return 'Unbekannter Fehler.';
-    if (res.status === 401) return 'Bitte in Immich anmelden.';
-    if (res.status === 0) return 'Gateway nicht erreichbar. Bitte Verbindung prüfen.';
+    if (!res) return t('error.unknown');
+    if (res.status === 401) return t('error.login');
+    if (res.status === 0) return t('error.unreachable');
     var d = res.data;
     if (d && typeof d === 'object') {
       var m = d.message || d.error;
@@ -120,40 +127,36 @@
       if (m) return String(m);
     }
     if (typeof d === 'string' && d && d.length < 300) return d;
-    return 'Fehler (HTTP ' + res.status + ').';
+    return t('error.http', { status: res.status });
   }
 
-  var rtf = (function () {
-    try {
-      return new Intl.RelativeTimeFormat('de', { numeric: 'auto' });
-    } catch (e) {
-      return null;
+  // --- Static texts (index.html) -------------------------------------------------------------------------
+
+  /**
+   * Fills the static page texts: data-i18n="key" → textContent, data-i18n-attr="title:key;aria-label:key" →
+   * attributes. Also sets <html lang> and the document title.
+   */
+  function applyStatic() {
+    var root = document.documentElement;
+    root.lang = I.lang();
+    document.title = t('page.title');
+    var els = document.querySelectorAll('[data-i18n]');
+    for (var i = 0; i < els.length; i++) els[i].textContent = t(els[i].getAttribute('data-i18n'));
+    var attrEls = document.querySelectorAll('[data-i18n-attr]');
+    for (var j = 0; j < attrEls.length; j++) {
+      attrEls[j]
+        .getAttribute('data-i18n-attr')
+        .split(';')
+        .forEach(function (pair) {
+          var idx = pair.indexOf(':');
+          if (idx > 0) attrEls[j].setAttribute(pair.slice(0, idx).trim(), t(pair.slice(idx + 1).trim()));
+        });
     }
-  })();
-
-  function relTime(iso) {
-    if (!iso) return null;
-    var t = new Date(iso).getTime();
-    if (!isFinite(t)) return null;
-    var diff = (t - Date.now()) / 1000;
-    var abs = Math.abs(diff);
-    if (abs < 45) return 'gerade eben';
-    if (!rtf) return new Date(t).toLocaleString('de-DE');
-    if (abs < 3600) return rtf.format(Math.round(diff / 60), 'minute');
-    if (abs < 86400) return rtf.format(Math.round(diff / 3600), 'hour');
-    if (abs < 86400 * 30) return rtf.format(Math.round(diff / 86400), 'day');
-    return new Date(t).toLocaleDateString('de-DE', { day: 'numeric', month: 'long', year: 'numeric' });
+    renderConnectBtn();
+    root.removeAttribute('data-i18n-pending');
   }
 
-  function absTime(iso) {
-    try {
-      return new Date(iso).toLocaleString('de-DE');
-    } catch (e) {
-      return '';
-    }
-  }
-
-  // --- Zustand ---------------------------------------------------------------------------------------
+  // --- State -----------------------------------------------------------------------------------------
 
   var state = {
     authed: null,
@@ -163,6 +166,8 @@
     deleteAssets: true,
     busy: {}, // linkId -> 'sync' | 'delete'
     notes: {}, // linkId -> { kind, text }
+    connecting: false,
+    lang: null,
   };
   var pollTimer = null;
 
@@ -181,7 +186,7 @@
     $('app').hidden = false;
   }
 
-  // --- Liste -----------------------------------------------------------------------------------------
+  // --- List ------------------------------------------------------------------------------------------
 
   function loadLinks() {
     return request('GET', API + '/links').then(function (res) {
@@ -214,12 +219,12 @@
       var p = l.progress;
       return h('span', { class: 'chip chip-sync' }, [
         svg(ICON.sync, 14, 'spin'),
-        p && p.total ? 'Synchronisiere … ' + p.done + ' / ' + p.total : 'Synchronisiere …',
+        p && p.total ? t('common.syncingProgress', { done: I.formatNumber(p.done), total: I.formatNumber(p.total) }) : t('common.syncing'),
       ]);
     }
-    if (l.lastError) return h('span', { class: 'chip chip-err' }, [svg(ICON.alert, 14), 'Fehler']);
-    if (l.lastSyncedAt) return h('span', { class: 'chip chip-ok' }, [svg(ICON.check, 14), 'Aktuell']);
-    return h('span', { class: 'chip', text: 'Ausstehend' });
+    if (l.lastError) return h('span', { class: 'chip chip-err' }, [svg(ICON.alert, 14), t('status.error')]);
+    if (l.lastSyncedAt) return h('span', { class: 'chip chip-ok' }, [svg(ICON.check, 14), t('status.upToDate')]);
+    return h('span', { class: 'chip', text: t('status.pending') });
   }
 
   function fact(label, value, title) {
@@ -230,8 +235,8 @@
     var busy = state.busy[l.id];
     var note = state.notes[l.id];
     var albumHref = '/albums/' + encodeURIComponent(l.albumId);
-    var lastSync = l.lastSyncedAt ? relTime(l.lastSyncedAt) : 'noch nie';
-    var name = l.remoteAlbumName || 'Unbenanntes Album';
+    var lastSync = l.lastSyncedAt ? I.relativeTime(l.lastSyncedAt) : t('link.never');
+    var name = l.remoteAlbumName || t('link.unnamed');
 
     var card = h('article', { class: 'link', 'aria-labelledby': 'link-title-' + l.id }, [
       h('div', { class: 'link-head' }, [
@@ -239,30 +244,30 @@
           h('h3', { class: 'link-title', id: 'link-title-' + l.id }, [h('a', { href: albumHref, text: name })]),
           h('div', { class: 'link-sub' }, [
             svg(ICON.earth, 16),
-            h('span', { text: (l.serverHost || 'unbekannter Server') + (l.remoteOwnerName ? ' · ' + l.remoteOwnerName : '') }),
+            h('span', { text: (l.serverHost || t('link.unknownServer')) + (l.remoteOwnerName ? ' · ' + l.remoteOwnerName : '') }),
           ]),
         ]),
         h('div', { class: 'chips' }, [
           statusChip(l),
-          h('span', { class: 'chip', text: l.showInTimeline ? 'In Zeitleiste' : 'Nur im Album' }),
-          l.importVideos === false ? h('span', { class: 'chip', text: 'Ohne Videos' }) : null,
-          l.allowDownload === false ? h('span', { class: 'chip', title: 'Der andere Server erlaubt keinen Download – es werden die lokalen Vorschauen angezeigt.', text: 'Originale gesperrt' }) : null,
+          h('span', { class: 'chip', text: l.showInTimeline ? t('link.inTimeline') : t('link.albumOnly') }),
+          l.importVideos === false ? h('span', { class: 'chip', text: t('link.noVideos') }) : null,
+          l.allowDownload === false ? h('span', { class: 'chip', title: t('link.originalsLockedTitle'), text: t('link.originalsLocked') }) : null,
         ]),
       ]),
       h('dl', { class: 'facts' }, [
-        fact('Einträge', typeof l.assetCount === 'number' ? String(l.assetCount) : '–'),
-        fact('Zuletzt synchronisiert', lastSync, l.lastSyncedAt ? absTime(l.lastSyncedAt) : undefined),
-        fact('Server', l.serverHost || '–'),
-        fact('Besitzer', l.remoteOwnerName || '–'),
+        fact(t('link.items'), typeof l.assetCount === 'number' ? I.formatNumber(l.assetCount) : '–'),
+        fact(t('link.lastSynced'), lastSync, l.lastSyncedAt ? I.formatDateTime(l.lastSyncedAt) : undefined),
+        fact(t('link.server'), l.serverHost || '–'),
+        fact(t('link.owner'), l.remoteOwnerName || '–'),
       ]),
-      l.lastError && !l.syncing ? h('div', { class: 'msg msg-error link-error', text: 'Letzter Fehler: ' + l.lastError }) : null,
+      l.lastError && !l.syncing ? h('div', { class: 'msg msg-error link-error', text: t('link.lastError', { error: l.lastError }) }) : null,
       note ? h('div', { class: 'msg ' + (note.kind === 'error' ? 'msg-error' : 'msg-success'), role: note.kind === 'error' ? 'alert' : 'status', text: note.text }) : null,
     ]);
 
     if (state.confirmId === l.id) {
       card.appendChild(
-        h('div', { class: 'confirm', role: 'group', 'aria-label': 'Trennen bestätigen' }, [
-          h('div', { class: 'confirm-text', text: '„' + name + '“ von ' + (l.serverHost || 'diesem Server') + ' trennen?' }),
+        h('div', { class: 'confirm', role: 'group', 'aria-label': t('common.confirmDisconnect') }, [
+          h('div', { class: 'confirm-text', text: t('link.confirmQuestion', { name: name, host: l.serverHost || t('common.thisServer') }) }),
           h('label', { class: 'check' }, [
             h('input', {
               type: 'checkbox',
@@ -272,14 +277,14 @@
                 state.deleteAssets = !!e.currentTarget.checked;
               },
             }),
-            'Lokales Album und lokale Kopien löschen',
+            t('link.deleteLocal'),
           ]),
           h('span', { class: 'spacer' }),
           h('button', {
             type: 'button',
             class: 'btn btn-outline',
             'data-key': 'cancel-' + l.id,
-            text: 'Abbrechen',
+            text: t('common.cancel'),
             disabled: busy === 'delete',
             onclick: function () {
               state.confirmId = null;
@@ -297,14 +302,14 @@
                 disconnect(l);
               },
             },
-            busy === 'delete' ? [svg(ICON.sync, 16, 'spin'), 'Trenne …'] : [svg(ICON.linkOff, 16), 'Ja, trennen'],
+            busy === 'delete' ? [svg(ICON.sync, 16, 'spin'), t('common.disconnecting')] : [svg(ICON.linkOff, 16), t('link.confirmYes')],
           ),
         ]),
       );
     } else {
       card.appendChild(
         h('div', { class: 'link-actions' }, [
-          h('a', { class: 'btn btn-outline', href: albumHref }, [svg(ICON.album, 16), 'Album öffnen']),
+          h('a', { class: 'btn btn-outline', href: albumHref }, [svg(ICON.album, 16), t('common.openAlbum')]),
           h(
             'button',
             {
@@ -316,7 +321,7 @@
                 syncNow(l);
               },
             },
-            [svg(ICON.sync, 16, l.syncing || busy === 'sync' ? 'spin' : null), 'Jetzt synchronisieren'],
+            [svg(ICON.sync, 16, l.syncing || busy === 'sync' ? 'spin' : null), t('common.syncNow')],
           ),
           h('span', { class: 'spacer' }),
           h(
@@ -332,7 +337,7 @@
                 render('yes-' + l.id);
               },
             },
-            [svg(ICON.linkOff, 16), 'Trennen'],
+            [svg(ICON.linkOff, 16), t('common.disconnect')],
           ),
         ]),
       );
@@ -340,7 +345,7 @@
     return card;
   }
 
-  /** Rendert die Liste neu und stellt den Fokus anhand von data-key wieder her. */
+  /** Re-renders the list and restores focus via data-key. */
   function render(focusKey) {
     var listEl = $('links');
     var active = document.activeElement;
@@ -353,9 +358,9 @@
     listEl.setAttribute('aria-busy', state.links === null ? 'true' : 'false');
     listEl.textContent = '';
     if (state.links === null) {
-      listEl.appendChild(h('p', { class: 'empty', text: 'Lade …' }));
+      listEl.appendChild(h('p', { class: 'empty', text: t('common.loading') }));
     } else if (!state.links.length) {
-      listEl.appendChild(h('p', { class: 'empty', text: 'Noch keine föderierten Alben. Füge oben einen Freigabe-Link ein.' }));
+      listEl.appendChild(h('p', { class: 'empty', text: t('page.empty') }));
     } else {
       state.links.forEach(function (l) {
         if (l && l.id) listEl.appendChild(renderLink(l));
@@ -368,7 +373,7 @@
     }
   }
 
-  // --- Aktionen --------------------------------------------------------------------------------------
+  // --- Actions ---------------------------------------------------------------------------------------
 
   function syncNow(l) {
     state.busy[l.id] = 'sync';
@@ -401,7 +406,7 @@
           return x.id !== l.id;
         });
         render();
-        flash('„' + (l.remoteAlbumName || 'Album') + '“ wurde getrennt' + (del ? ' und lokal gelöscht.' : '. Die lokalen Kopien bleiben erhalten.'));
+        flash(t(del ? 'link.disconnectedDeleted' : 'link.disconnectedKept', { name: l.remoteAlbumName || t('link.albumFallback') }));
         loadLinks();
       } else if (res.status !== 401) {
         state.notes[l.id] = { kind: 'error', text: errorMessage(res) };
@@ -420,7 +425,7 @@
     }, 6000);
   }
 
-  // --- Verbinden-Formular ----------------------------------------------------------------------------
+  // --- Connect form ----------------------------------------------------------------------------------
 
   function setConnectMsg(kind, children) {
     var m = $('connect-msg');
@@ -431,17 +436,23 @@
     m.hidden = false;
   }
 
+  function renderConnectBtn() {
+    var btn = $('connect-btn');
+    if (!btn) return;
+    btn.textContent = '';
+    add(btn, state.connecting ? [svg(ICON.sync, 16, 'spin'), t('common.connecting')] : t('common.connect'));
+  }
+
   function initForm() {
     var form = $('connect-form');
     var input = $('share-url');
     var toggle = $('show-timeline');
     var videoToggle = $('import-videos');
     var btn = $('connect-btn');
-    var busy = false;
 
     form.addEventListener('submit', function (e) {
       e.preventDefault();
-      if (busy) return;
+      if (state.connecting) return;
       $('connect-msg').hidden = true;
       var url = (input.value || '').trim();
       var parsed = null;
@@ -451,39 +462,38 @@
         parsed = null;
       }
       if (!parsed || !/^https?:$/.test(parsed.protocol)) {
-        setConnectMsg('error', 'Bitte einen vollständigen Freigabe-Link einfügen (beginnt mit https:// oder http://).');
+        setConnectMsg('error', t('connect.invalidUrl'));
         input.focus();
         return;
       }
       if (!/\/(share|s)\/[^/]+/.test(parsed.pathname)) {
-        setConnectMsg('error', 'Das sieht nicht nach einem Immich-Freigabe-Link aus. Erwartet wird …/share/<Schlüssel> oder …/s/<Name>.');
+        setConnectMsg('error', t('connect.notShareLink'));
         input.focus();
         return;
       }
-      busy = true;
+      state.connecting = true;
       btn.disabled = true;
       input.disabled = true;
       toggle.disabled = true;
       videoToggle.disabled = true;
-      btn.textContent = '';
-      add(btn, [svg(ICON.sync, 16, 'spin'), 'Verbinde …']);
+      renderConnectBtn();
 
       request('POST', API + '/links', { shareUrl: url, showInTimeline: !!toggle.checked, importVideos: !!videoToggle.checked }).then(function (res) {
-        busy = false;
+        state.connecting = false;
         btn.disabled = false;
         input.disabled = false;
         toggle.disabled = false;
         videoToggle.disabled = false;
-        btn.textContent = 'Verbinden';
+        renderConnectBtn();
         if (res.ok && res.data && res.data.albumId) {
           input.value = '';
           setConnectMsg('success', [
-            'Verbunden – die Synchronisierung läuft im Hintergrund. ',
-            h('a', { href: '/albums/' + encodeURIComponent(res.data.albumId), text: 'Album öffnen' }),
+            t('connect.success') + ' ',
+            h('a', { href: '/albums/' + encodeURIComponent(res.data.albumId), text: t('common.openAlbum') }),
           ]);
           loadLinks();
         } else if (res.status === 401) {
-          setConnectMsg('error', 'Bitte in Immich anmelden.');
+          setConnectMsg('error', t('error.login'));
         } else {
           setConnectMsg('error', errorMessage(res));
           input.focus();
@@ -494,7 +504,19 @@
 
   // --- Start -----------------------------------------------------------------------------------------
 
+  /** Language changed in Immich (other tab, or settings changed before returning here) → re-translate. */
+  function checkLang() {
+    var lang = I.lang();
+    if (lang === state.lang) return;
+    state.lang = lang;
+    applyStatic();
+    if (state.links !== null) render();
+  }
+
   function init() {
+    state.lang = I.lang();
+    applyStatic();
+    I.onChange(checkLang);
     try {
       $('login-link').setAttribute('href', '/auth/login?continue=' + encodeURIComponent(location.pathname + location.search));
     } catch (e) {
@@ -505,7 +527,7 @@
       loadLinks();
     });
 
-    // Angemeldeten Benutzer anzeigen (gleiche Origin → Immich-API über das Gateway)
+    // Show the logged-in user (same origin → Immich API through the gateway)
     request('GET', '/api/users/me').then(function (res) {
       if (res.ok && res.data && typeof res.data === 'object') {
         var u = $('user');
@@ -516,13 +538,16 @@
     });
     loadLinks();
 
-    // Relative Zeiten aktuell halten, ohne Bestätigungsdialoge zu stören
+    // Keep relative times up to date without disturbing confirmation dialogs
     setInterval(function () {
+      checkLang();
       if (state.authed && state.links && state.links.length && !state.confirmId) render();
     }, 60000);
 
     document.addEventListener('visibilitychange', function () {
-      if (document.visibilityState === 'visible' && state.authed !== false) loadLinks();
+      if (document.visibilityState !== 'visible') return;
+      checkLang();
+      if (state.authed !== false) loadLinks();
     });
 
     document.addEventListener('keydown', function (e) {

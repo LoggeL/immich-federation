@@ -5,6 +5,7 @@ import { mkdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { LocalizedError } from './i18n.ts';
 
 const EXT_BY_MIME: Record<string, string> = {
   'image/jpeg': '.jpg',
@@ -37,7 +38,7 @@ export function isWebCompatibleImageMime(mime: string | null | undefined): boole
   return ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif', 'image/avif', 'image/svg+xml', 'image/apng', 'image/bmp'].includes(m);
 }
 
-export class TooLargeError extends Error {}
+export class TooLargeError extends LocalizedError {}
 
 /** Write a (remote) body to disk, aborting once more than `maxBytes` arrived. */
 export async function streamToFile(
@@ -46,14 +47,14 @@ export async function streamToFile(
   maxBytes = Number.POSITIVE_INFINITY,
 ): Promise<number> {
   if (!body) {
-    throw new Error('Leere Antwort');
+    throw new LocalizedError('empty_response');
   }
   let seen = 0;
   const limit = new Transform({
     transform(chunk: Buffer, _encoding, callback) {
       seen += chunk.length;
       if (seen > maxBytes) {
-        callback(new TooLargeError(`Datei größer als ${Math.round(maxBytes / 1024 / 1024)} MB – übersprungen`));
+        callback(new TooLargeError('file_exceeds_limit', { mb: Math.round(maxBytes / 1024 / 1024) }));
         return;
       }
       callback(null, chunk);
@@ -191,7 +192,12 @@ export function transcodeVideoProxy(
           if (code === 0) {
             resolve();
           } else {
-            reject(new Error(`ffmpeg fehlgeschlagen (${signal ?? code}): ${stderr.trim().split('\n').slice(-3).join(' | ')}`));
+            reject(
+              new LocalizedError('ffmpeg_failed', {
+                code: String(signal ?? code),
+                detail: stderr.trim().split('\n').slice(-3).join(' | '),
+              }),
+            );
           }
         });
       }),

@@ -25,7 +25,7 @@ const SHARE_KEY = 'FRIENDKEY1234';
 
 // ---------------- fake local Immich ----------------
 const local = {
-  albums: new Map<string, { id: string; albumName: string; assets: Set<string> }>(),
+  albums: new Map<string, { id: string; albumName: string; description: string; assets: Set<string> }>(),
   assets: new Map<string, { id: string; filename: string; size: number; fieldsBeforeFile: boolean; type: string }>(),
   updates: new Map<string, any>(),
   deleted: [] as string[],
@@ -78,7 +78,7 @@ const localServer = http.createServer(async (req, res) => {
   }
   if (p === '/api/albums' && req.method === 'POST') {
     const body = JSON.parse((await readBody(req)).toString());
-    const album = { id: randomUUID(), albumName: body.albumName, assets: new Set<string>() };
+    const album = { id: randomUUID(), albumName: body.albumName, description: body.description, assets: new Set<string>() };
     local.albums.set(album.id, album);
     return sendJson(res, 201, { id: album.id, albumName: album.albumName });
   }
@@ -397,6 +397,25 @@ describe('federation', () => {
     assert.equal(res.status, 401);
   });
 
+  it('localizes API errors (X-Federation-Lang, then Accept-Language, default English)', async () => {
+    const error = async (headers: Record<string, string>) => {
+      const res = await fetch(`${base}/federation/api/links`, { headers });
+      assert.equal(res.status, 401);
+      return (await res.json()) as { message: string; statusCode: number; code: string };
+    };
+    assert.deepEqual(await error({}), { message: 'Not logged in', statusCode: 401, code: 'not_logged_in' });
+    assert.deepEqual(await error({ 'x-federation-lang': 'de' }), {
+      message: 'Nicht angemeldet',
+      statusCode: 401,
+      code: 'not_logged_in',
+    });
+    assert.equal((await error({ 'x-federation-lang': 'gsw' })).message, 'Nicht angemeldet');
+    assert.equal((await error({ 'accept-language': 'fr, de-CH;q=0.9' })).message, 'Nicht angemeldet');
+    assert.equal((await error({ 'x-federation-lang': 'fr', 'accept-language': 'de' })).message, 'Not logged in');
+    const unknown = await fetch(`${base}/federation/api/nope`, { headers: { 'x-federation-lang': 'de_AT' } });
+    assert.deepEqual(await unknown.json(), { message: 'Unbekannter Endpunkt', statusCode: 404, code: 'unknown_endpoint' });
+  });
+
   it('rejects cross-origin writes', async () => {
     const res = await fetch(`${base}/federation/api/links`, {
       method: 'POST',
@@ -407,19 +426,36 @@ describe('federation', () => {
   });
 
   it('rejects invalid share links', async () => {
-    const res = await fetch(`${base}/federation/api/links`, {
+    const post = (headers: Record<string, string> = {}) =>
+      fetch(`${base}/federation/api/links`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...COOKIE, ...headers },
+        body: JSON.stringify({ shareUrl: `http://127.0.0.1:${friendPort}/share/WRONGKEY99` }),
+      });
+    let res = await post();
+    assert.equal(res.status, 400);
+    let body = (await res.json()) as any;
+    assert.match(body.message, /^Share link invalid, expired or revoked/);
+    assert.equal(body.code, 'remote_link_invalid');
+    res = await post({ 'x-federation-lang': 'de' });
+    body = (await res.json()) as any;
+    assert.match(body.message, /^Freigabelink ungültig/);
+    assert.equal(body.code, 'remote_link_invalid');
+
+    res = await fetch(`${base}/federation/api/links`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...COOKIE },
-      body: JSON.stringify({ shareUrl: `http://127.0.0.1:${friendPort}/share/WRONGKEY99` }),
+      headers: { 'content-type': 'application/json', 'x-federation-lang': 'de', ...COOKIE },
+      body: JSON.stringify({ shareUrl: 'https://friend.example/albums/123' }),
     });
     assert.equal(res.status, 400);
-    assert.match(((await res.json()) as any).message, /ungültig/);
+    assert.match(((await res.json()) as any).message, /^Das ist kein Immich-Freigabelink/);
   });
 
   it('connects a link and syncs previews + video proxy into local Immich', async () => {
+    // connected by a German user: everything written into Immich for this link is German
     const res = await fetch(`${base}/federation/api/links`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', ...COOKIE },
+      headers: { 'content-type': 'application/json', 'x-federation-lang': 'de-DE', ...COOKIE },
       body: JSON.stringify({ shareUrl: `http://127.0.0.1:${friendPort}/share/${SHARE_KEY}`, showInTimeline: true }),
     });
     assert.equal(res.status, 201, await res.clone().text());
@@ -433,6 +469,8 @@ describe('federation', () => {
     assert.equal('shareKey' in link, false);
     assert.equal(local.apiKeys, 1);
     assert.equal(local.albums.get(albumId)!.albumName, 'Urlaub 2025');
+    assert.equal(local.albums.get(albumId)!.description, `Föderiert von 127.0.0.1:${friendPort} (Anna)`);
+    assert.equal(gateway.store.getLink(linkId)!.lang, 'de');
     assert.equal(local.albums.get(albumId)!.assets.size, 2);
 
     const uploads = [...local.assets.values()];
@@ -442,6 +480,19 @@ describe('federation', () => {
     assert.equal(update.dateTimeOriginal, '2025-07-01T14:00:00.000+02:00');
     assert.equal(update.latitude, 47.5);
     assert.match(update.description, /Föderiert von 127\.0\.0\.1:\d+ · Anna/);
+  });
+
+  it('localizes the stored sync log at read time', async () => {
+    const detail = async (lang?: string) =>
+      (await (
+        await fetch(`${base}/federation/api/links/${linkId}`, { headers: { ...COOKIE, ...(lang ? { 'x-federation-lang': lang } : {}) } })
+      ).json()) as any;
+    const en = await detail();
+    const de = await detail('de');
+    assert.ok(en.log.some((e: any) => e.message === 'Connected by me@test'), JSON.stringify(en.log));
+    assert.ok(en.log.some((e: any) => /^Sync finished in \d+ s: \+2 \/ -0$/.test(e.message)), JSON.stringify(en.log));
+    assert.ok(de.log.some((e: any) => e.message === 'Verbunden durch me@test'), JSON.stringify(de.log));
+    assert.ok(de.log.some((e: any) => /^Sync fertig in \d+ s: \+2 \/ -0$/.test(e.message)), JSON.stringify(de.log));
   });
 
   it('refuses to connect the same album twice', async () => {
@@ -574,8 +625,13 @@ describe('federation', () => {
     // sync records the error but keeps the assets
     await gateway.sync.trigger(linkId);
     const link = await waitIdle();
-    assert.match(link.lastError, /ECONNREFUSED/);
+    assert.match(link.lastError, /^Sync failed: .*ECONNREFUSED/);
     assert.equal(link.assetCount, 1);
+    const de = (await (
+      await fetch(`${base}/federation/api/links/${linkId}`, { headers: { ...COOKIE, 'x-federation-lang': 'de' } })
+    ).json()) as any;
+    assert.match(de.lastError, /^Synchronisation fehlgeschlagen: .*ECONNREFUSED/);
+    assert.match(de.log[0].message, /^Synchronisation fehlgeschlagen: /);
     await listen(friendServer).then((p) => {
       // re-listen on a new port is fine; the link keeps pointing at the old one (offline)
       void p;

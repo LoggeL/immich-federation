@@ -1,4 +1,10 @@
-/* immich-federation – Verwaltungsseite. Farben angelehnt an Immich (@immich/ui default theme). */
+/* immich-federation – management page. Colors modeled on Immich (@immich/ui default theme). */
+
+/* Until ui.js has filled in the translated texts (see i18n.js), hide the English placeholders → no flash. */
+html[data-i18n-pending] [data-i18n] {
+  visibility: hidden;
+}
+
 :root {
   --primary: #4250af;
   --primary-fg: #ffffff;
@@ -107,7 +113,7 @@ h3 {
   border-radius: 8px;
 }
 
-/* Kopfzeile */
+/* Header */
 .topbar {
   position: sticky;
   top: 0;
@@ -181,7 +187,7 @@ main {
   max-width: 70ch;
 }
 
-/* Karten */
+/* Cards */
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -209,7 +215,7 @@ main {
   color: var(--muted);
 }
 
-/* Formular */
+/* Form */
 .field label {
   display: block;
   font-weight: 500;
@@ -362,7 +368,7 @@ input[type='checkbox']:focus-visible {
   flex: none;
 }
 
-/* Meldungen */
+/* Messages */
 .msg {
   margin-top: 14px;
   padding: 10px 14px;
@@ -383,7 +389,7 @@ input[type='checkbox']:focus-visible {
   font-weight: 600;
 }
 
-/* Liste */
+/* List */
 .links-section {
   margin-top: 32px;
 }
@@ -513,7 +519,7 @@ input[type='checkbox']:focus-visible {
   flex: 1;
 }
 
-/* Status-Chips */
+/* Status chips */
 .chip {
   display: inline-flex;
   align-items: center;

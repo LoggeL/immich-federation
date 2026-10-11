@@ -64,8 +64,8 @@ export function assertWritableDir(dir: string) {
   } catch {
     const uid = typeof process.getuid === 'function' ? process.getuid() : '?';
     throw new Error(
-      `DATA_DIR ${dir} ist nicht beschreibbar für UID ${uid} – auf dem Host z.B. "chown -R 1000:1000 <host-pfad>" ausführen ` +
-        'oder ein benanntes Docker-Volume verwenden',
+      `DATA_DIR ${dir} is not writable for UID ${uid} – run e.g. "chown -R 1000:1000 <host-path>" on the host ` +
+        'or use a named Docker volume',
     );
   }
 }

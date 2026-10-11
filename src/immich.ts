@@ -1,15 +1,19 @@
 import { openAsBlob } from 'node:fs';
 import type { ForwardedAuth } from './auth.ts';
+import type { Msg } from './i18n.ts';
 
 /** Minimal client for the LOCAL (upstream) Immich v3.3.0 public API. */
 
+/** `message` is technical (for logs); `localized` optionally carries a user-facing message. */
 export class ImmichError extends Error {
   status: number;
   body: unknown;
-  constructor(message: string, status: number, body?: unknown) {
+  localized?: Msg;
+  constructor(message: string, status: number, body?: unknown, localized?: Msg) {
     super(message);
     this.status = status;
     this.body = body;
+    this.localized = localized;
   }
 }
 

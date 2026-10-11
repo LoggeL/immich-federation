@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
+import { t } from '../src/i18n.ts';
 import { RemoteClient, RemoteError } from '../src/remote.ts';
 
 const json = (body: unknown, status = 200) =>
@@ -91,6 +92,15 @@ describe('RemoteClient', () => {
     assert.equal(calls[0], '/api/shared-links/me?slug=urlaub');
   });
 
+  it('falls back to a localized album name', async () => {
+    const { fetch } = mockFetch({
+      '/api/shared-links/me': () => json({ id: 'l', type: 'INDIVIDUAL', assets: [{ id: 'x', type: 'IMAGE' }] }),
+    });
+    const client = new RemoteClient({ allowPrivate: true, timeoutMs: 1000, fetch });
+    assert.equal((await client.getLinkInfo(link)).albumName, 'Federated album');
+    assert.equal((await client.getLinkInfo(link, 'de')).albumName, 'Föderiertes Album');
+  });
+
   it('maps auth errors to readable messages', async () => {
     const { fetch } = mockFetch({
       '/api/shared-links/me': () => json({ message: 'Invalid share key' }, 401),
@@ -99,15 +109,17 @@ describe('RemoteClient', () => {
     await assert.rejects(client.getLinkInfo(link), (error: unknown) => {
       assert.ok(error instanceof RemoteError);
       assert.equal(error.status, 401);
-      assert.match(error.message, /ungültig/);
+      assert.equal(error.key, 'remote_link_invalid');
+      assert.match(error.message, /Share link invalid, expired or revoked \(Invalid share key\)/);
+      assert.equal(t('de', error.key, error.params), 'Freigabelink ungültig, abgelaufen oder widerrufen (Invalid share key)');
       return true;
     });
   });
 
   it('blocks private remotes unless allowed', async () => {
     const client = new RemoteClient({ allowPrivate: false, timeoutMs: 1000, fetch: async () => json({}) });
-    await assert.rejects(client.getLinkInfo({ baseUrl: 'http://127.0.0.1:2291', key: 'k' }), /private Adresse/);
-    await assert.rejects(client.getLinkInfo({ baseUrl: 'http://192.168.1.10', key: 'k' }), /private Adresse/);
+    await assert.rejects(client.getLinkInfo({ baseUrl: 'http://127.0.0.1:2291', key: 'k' }), /private address/);
+    await assert.rejects(client.getLinkInfo({ baseUrl: 'http://192.168.1.10', key: 'k' }), /private address/);
   });
 
   it('re-checks redirect targets', async () => {
@@ -119,6 +131,6 @@ describe('RemoteClient', () => {
       return json({ ok: true });
     };
     const client = new RemoteClient({ allowPrivate: false, timeoutMs: 1000, fetch });
-    await assert.rejects(client.getLinkInfo({ baseUrl: 'http://1.1.1.1', key: 'k' }), /private Adresse/);
+    await assert.rejects(client.getLinkInfo({ baseUrl: 'http://1.1.1.1', key: 'k' }), /private address/);
   });
 });

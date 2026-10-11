@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import type { SecretBox } from './crypto.ts';
+import { encodeStored, resolveLang, type Lang, type Msg } from './i18n.ts';
 
 export interface UserRow {
   id: string;
@@ -27,8 +28,11 @@ export interface LinkRow {
   showMetadata: boolean;
   /** false = videos of this link are not imported (no full video download/transcode) */
   importVideos: boolean;
+  /** Language of the user who connected the link: used for text written into Immich (descriptions, album name). */
+  lang: Lang;
   createdAt: string;
   lastSyncedAt: string | null;
+  /** Stored message marker (see i18n.encodeStored) or legacy plain text; localize when reading. */
   lastError: string | null;
 }
 
@@ -134,6 +138,10 @@ export class Store {
     if (!has('assets', 'metaApplied')) {
       this.db.exec('ALTER TABLE assets ADD COLUMN metaApplied INTEGER NOT NULL DEFAULT 1');
     }
+    if (!has('links', 'lang')) {
+      // links created before i18n got German descriptions in Immich -> keep them German
+      this.db.exec("ALTER TABLE links ADD COLUMN lang TEXT; UPDATE links SET lang = 'de';");
+    }
   }
 
   close() {
@@ -177,6 +185,7 @@ export class Store {
       allowDownload: b(row.allowDownload),
       showMetadata: b(row.showMetadata),
       importVideos: row.importVideos === undefined || row.importVideos === null ? true : b(row.importVideos),
+      lang: resolveLang(row.lang),
       createdAt: row.createdAt,
       lastSyncedAt: row.lastSyncedAt,
       lastError: row.lastError,
@@ -187,8 +196,8 @@ export class Store {
     this.db
       .prepare(
         `INSERT INTO links (id, userId, baseUrl, serverHost, shareKeyEnc, shareSlugEnc, remoteLinkId, remoteAlbumId,
-           remoteAlbumName, remoteOwnerName, albumId, showInTimeline, allowDownload, showMetadata, importVideos, createdAt, lastSyncedAt, lastError)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           remoteAlbumName, remoteOwnerName, albumId, showInTimeline, allowDownload, showMetadata, importVideos, lang, createdAt, lastSyncedAt, lastError)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         link.id,
@@ -206,6 +215,7 @@ export class Store {
         link.allowDownload ? 1 : 0,
         link.showMetadata ? 1 : 0,
         link.importVideos === false ? 0 : 1,
+        resolveLang(link.lang),
         link.createdAt,
         link.lastSyncedAt,
         link.lastError,
@@ -358,10 +368,12 @@ export class Store {
   }
 
   // ---------- log ----------
-  log(linkId: string, level: 'info' | 'warn' | 'error', message: string) {
+  /** `message` is stored as a translatable marker (Msg) or plain text; see getLog. */
+  log(linkId: string, level: 'info' | 'warn' | 'error', message: Msg | string) {
+    const stored = encodeStored(message);
     this.db
       .prepare('INSERT INTO sync_log (linkId, at, level, message) VALUES (?, ?, ?, ?)')
-      .run(linkId, new Date().toISOString(), level, message.slice(0, 2000));
+      .run(linkId, new Date().toISOString(), level, typeof message === 'string' ? stored.slice(0, 2000) : stored);
     // keep the log bounded per link
     this.db
       .prepare(
@@ -370,6 +382,7 @@ export class Store {
       .run(linkId, linkId);
   }
 
+  /** Raw entries; messages are markers or legacy text -> i18n.localizeStored before showing them. */
   getLog(linkId: string, limit = 50) {
     return this.db
       .prepare('SELECT at, level, message FROM sync_log WHERE linkId = ? ORDER BY id DESC LIMIT ?')

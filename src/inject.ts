@@ -1,8 +1,14 @@
 import type { IncomingMessage } from 'node:http';
 
-export const INJECT_TAG = '<script src="/federation/inject.js" defer></script>';
+/**
+ * i18n.js (translations, window.__ifedI18n) must run before inject.js. Both are classic `defer` scripts, which the
+ * browser executes in document order after parsing, so the order of the two tags guarantees it. inject.js also
+ * loads i18n.js on demand should it ever be missing (e.g. HTML cached from an older gateway version).
+ */
+export const INJECT_TAG =
+  '<script src="/federation/i18n.js" defer></script><script src="/federation/inject.js" defer></script>';
 
-/** Insert the federation script into an HTML document (idempotent). */
+/** Insert the federation scripts into an HTML document (idempotent: keyed on inject.js). */
 export function injectScript(html: string, tag = INJECT_TAG): string {
   if (html.includes('/federation/inject.js')) {
     return html;

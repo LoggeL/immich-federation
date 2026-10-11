@@ -37,7 +37,8 @@ immich-federation makes a friend's album feel like a native album in your own Im
 | ![Federation management page](docs/screenshots/federation.webp) | ![Dark mode](docs/screenshots/album-dark.webp) |
 | **`/federation/`** — manage all links, progress and errors. | Light and dark mode follow Immich. |
 
-The UI additions are currently **German only** (screenshots show the German Immich UI). Demo photos:
+The UI additions are available in **English and German** and follow your Immich language setting (screenshots show
+the German Immich UI). Demo photos:
 [Unsplash](https://unsplash.com/license) via [Lorem Picsum](https://picsum.photos).
 
 ## How it works
@@ -55,7 +56,7 @@ flowchart LR
    (with your session) and stores it encrypted.
 2. **Sync** (immediately, every 30 minutes, or "sync now"). For each photo the gateway downloads the friend's
    preview (~1440 px JPEG); for each video the playback file, transcoded with ffmpeg to a small 480p proxy. It uploads
-   that copy to your Immich through the regular API, sets capture date, GPS and a description ("Föderiert von …"),
+   that copy to your Immich through the regular API, sets capture date, GPS and a description ("Federated from …"),
    and adds it to a local album with the remote album's name. Your Immich then generates thumbnails, CLIP
    embeddings, faces and OCR — all locally. Photos removed by your friend are removed locally; photos you delete
    locally are not re-imported. Large albums are handled politely: at most 3 parallel downloads, videos one at a
@@ -78,6 +79,7 @@ flowchart LR
 * Automatic sync (additions and removals), resumable, bounded concurrency, progress and errors in UI and API
 * Works with the Immich web app and the Immich mobile app (same server URL, same endpoints)
 * Multi-user: every Immich user connects their own links with their own credentials
+* English and German UI, following the language chosen in Immich (see [Language](#language))
 * Zero npm dependencies, Node 24, SQLite (`node:sqlite`); ~40 MB RAM at idle
 
 ## Limitations
@@ -94,7 +96,24 @@ flowchart LR
 * Local edits (crop/rotate) of a federated photo make your Immich serve the edited preview copy instead of the
   friend's original. Live photos: only the still image. Stacks: imported as individual photos.
 * Immich's experimental HLS real-time transcoding plays the local 480p proxy.
-* The injected UI and the `/federation/` page are German only for now.
+* Only English and German are translated so far; other Immich languages fall back to English.
+
+## Language
+
+The injected UI and the `/federation/` page use the language you picked in Immich (**Account settings → App
+settings → Language**, stored by Immich in the browser) and fall back to your browser languages, then English. Dates
+and numbers follow Immich's *Custom locale* setting. Changing the language in Immich applies without a
+reload. Currently supported: **English** and **German** (incl. Swiss German variants); every other language shows
+English.
+
+* The browser sends the resolved language to the gateway (`X-Federation-Lang`, falling back to `Accept-Language`),
+  so error messages, sync status and the per-link log come back in your language. API errors also carry a stable
+  `code`. Server logs are always English.
+* Text the gateway writes **into Immich** — the album description and the "Federated from …" footer on each
+  photo's description — uses the language of the user who connected the link, fixed at connect time. Links created
+  before the language support (gateway ≤ 0.1.0) keep their German texts.
+* Adding a language: add a catalog to `public/i18n.js` (UI) and `src/i18n.ts` (server messages); missing keys fall
+  back to English.
 
 ## Security model
 
@@ -166,7 +185,7 @@ docker compose up -d immich-federation immich-server
 curl -s http://localhost:2283/federation/api/health   # {"ok":true}
 ```
 
-Open Immich as usual. The albums page now shows **"Föderiertes Album verbinden"** (connect federated album); the
+Open Immich as usual. The albums page now shows **"Connect federated album"** (German: „Föderiertes Album verbinden"); the
 management page is at `/federation/` (also in the sidebar and account menu).
 
 **About `FEDERATION_SECRET`:** without it the gateway generates `/data/secret.key` once. Key and encrypted secrets

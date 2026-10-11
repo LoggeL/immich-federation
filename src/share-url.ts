@@ -1,3 +1,5 @@
+import { LocalizedError } from './i18n.ts';
+
 export interface ParsedShareUrl {
   /** Origin incl. optional base path, without trailing slash, e.g. `https://photos.friend.de` */
   baseUrl: string;
@@ -20,23 +22,28 @@ const SLUG_RE = /^[A-Za-z0-9._~-]{1,200}$/;
 export function parseShareUrl(input: string): ParsedShareUrl {
   const raw = (input ?? '').trim();
   if (!raw) {
-    throw new Error('Kein Freigabelink angegeben');
+    throw new LocalizedError('share_url_empty');
   }
 
   let url: URL;
   try {
     url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`);
   } catch {
-    throw new Error('Ungültige URL');
+    throw new LocalizedError('share_url_invalid');
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new Error('Nur http(s)-Links werden unterstützt');
+    throw new LocalizedError('share_url_protocol');
   }
   if (url.username || url.password) {
-    throw new Error('Links mit Zugangsdaten in der URL werden nicht unterstützt');
+    throw new LocalizedError('share_url_credentials');
   }
 
-  const segments = url.pathname.split('/').filter(Boolean).map((s) => decodeURIComponent(s));
+  let segments: string[];
+  try {
+    segments = url.pathname.split('/').filter(Boolean).map((s) => decodeURIComponent(s));
+  } catch {
+    throw new LocalizedError('share_url_invalid');
+  }
   // search from the end so a base path containing "share" does not confuse us
   for (let i = segments.length - 2; i >= 0; i--) {
     const kind = segments[i];
@@ -60,7 +67,7 @@ export function parseShareUrl(input: string): ParsedShareUrl {
     return { baseUrl: url.origin, host: url.host, key };
   }
 
-  throw new Error('Das ist kein Immich-Freigabelink (erwartet …/share/<schlüssel> oder …/s/<slug>)');
+  throw new LocalizedError('share_url_not_immich');
 }
 
 /** Query string fragment authenticating against the remote as that shared link */

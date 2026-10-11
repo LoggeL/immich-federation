@@ -5,6 +5,7 @@ import https from 'node:https';
 import { BlockList, isIP } from 'node:net';
 import { Readable } from 'node:stream';
 import zlib from 'node:zlib';
+import { LocalizedError } from './i18n.ts';
 
 const blocked = new BlockList();
 // IPv4
@@ -54,7 +55,7 @@ export function isPrivateAddress(address: string): boolean {
   return true; // not an IP at all -> treat as unsafe
 }
 
-export class SsrfError extends Error {}
+export class SsrfError extends LocalizedError {}
 
 export interface SsrfOptions {
   allowPrivate: boolean;
@@ -63,10 +64,10 @@ export interface SsrfOptions {
 /** Throws SsrfError if the URL is not http(s) or (unless allowed) resolves to a private address. */
 export async function assertSafeUrl(url: URL, { allowPrivate }: SsrfOptions): Promise<void> {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new SsrfError(`Protokoll ${url.protocol} ist nicht erlaubt`);
+    throw new SsrfError('ssrf_protocol', { protocol: url.protocol });
   }
   if (url.username || url.password) {
-    throw new SsrfError('Zugangsdaten in URLs sind nicht erlaubt');
+    throw new SsrfError('ssrf_credentials');
   }
   if (allowPrivate) {
     return;
@@ -75,16 +76,14 @@ export async function assertSafeUrl(url: URL, { allowPrivate }: SsrfOptions): Pr
   const addresses = isIP(hostname)
     ? [{ address: hostname }]
     : await lookup(hostname, { all: true, verbatim: true }).catch(() => {
-        throw new SsrfError(`Host ${hostname} kann nicht aufgelöst werden`);
+        throw new SsrfError('ssrf_unresolvable', { host: hostname });
       });
   if (addresses.length === 0) {
-    throw new SsrfError(`Host ${hostname} kann nicht aufgelöst werden`);
+    throw new SsrfError('ssrf_unresolvable', { host: hostname });
   }
   for (const { address } of addresses) {
     if (isPrivateAddress(address)) {
-      throw new SsrfError(
-        `Host ${hostname} zeigt auf eine private Adresse (${address}). Für LAN-Server ALLOW_PRIVATE_REMOTES=true setzen.`,
-      );
+      throw new SsrfError('ssrf_private', { host: hostname, address });
     }
   }
 }
@@ -106,7 +105,7 @@ export function guardedLookup(hostname: string, options: { all?: boolean; family
     const bad = list.find((a) => isPrivateAddress(a.address));
     if (list.length === 0 || bad) {
       return callback(
-        Object.assign(new SsrfError(`Host ${hostname} zeigt auf eine private Adresse (${bad?.address ?? '–'})`), {
+        Object.assign(new SsrfError('ssrf_private_connect', { host: hostname, address: bad?.address ?? '–' }), {
           code: 'ESSRF',
         }) as NodeJS.ErrnoException,
         '',
@@ -133,7 +132,7 @@ export function nodeFetch(input: string | URL, init: RequestInit = {}, { allowPr
   const url = new URL(input);
   const method = (init.method ?? 'GET').toUpperCase();
   if (init.body != null) {
-    return Promise.reject(new Error('nodeFetch unterstützt keinen Request-Body'));
+    return Promise.reject(new Error('nodeFetch does not support a request body'));
   }
   const headers: Record<string, string> = {};
   new Headers(init.headers).forEach((value, key) => {
@@ -218,7 +217,7 @@ export async function safeFetch(
     const onAbort = () => controller.abort(init.signal?.reason);
     init.signal?.addEventListener('abort', onAbort, { once: true });
     const timer = setTimeout(
-      () => controller.abort(new Error(`Zeitüberschreitung nach ${options.timeoutMs} ms`)),
+      () => controller.abort(new LocalizedError('timeout', { ms: options.timeoutMs })),
       options.timeoutMs,
     );
     let response: Response;
@@ -234,7 +233,7 @@ export async function safeFetch(
     if (response.status >= 300 && response.status < 400 && location) {
       await response.body?.cancel().catch(() => {});
       if (hop >= maxRedirects) {
-        throw new Error('Zu viele Weiterleitungen');
+        throw new LocalizedError('too_many_redirects');
       }
       url = new URL(location, url);
       continue;

@@ -4,6 +4,7 @@ import type { Config } from './config.ts';
 import type { AssetRow, LinkRow, Store } from './db.ts';
 import { ImmichClient, ImmichError, SYNC_PERMISSIONS, type ImmichAuth } from './immich.ts';
 import type { ForwardedAuth } from './auth.ts';
+import { encodeStored, errorParam, format, LocalizedError, msg, t, type Lang, type Msg, type Param } from './i18n.ts';
 import { describeError, logger } from './log.ts';
 import {
   extensionForMime,
@@ -23,8 +24,6 @@ const log = logger('sync');
 export const FEDERATION_METADATA_KEY = 'immich-federation';
 const API_KEY_NAME = 'Immich Federation Gateway';
 const UPLOAD_CONCURRENCY = 3;
-/** Prefix of lastError when the stored Immich API key stopped working (e.g. deleted by the user). */
-export const API_KEY_INVALID = 'API-Schlüssel des Gateways ungültig – Föderationsseite einmal öffnen, dann wird er erneuert';
 
 export interface LinkStatus {
   syncing: boolean;
@@ -63,10 +62,31 @@ export function buildDateTimeOriginal(asset: RemoteAsset): string {
   return `${local}${sign}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
 }
 
-export function federationDescription(asset: RemoteAsset, host: string, owner: string) {
-  const footer = `Föderiert von ${host}${owner ? ` · ${owner}` : ''}`;
+/** Asset description written into Immich: the remote description plus an origin footer in the link's language. */
+export function federationDescription(asset: RemoteAsset, host: string, owner: string, lang: Lang) {
+  const footer = owner ? t(lang, 'federated_from_asset_owner', { host, owner }) : t(lang, 'federated_from', { host });
   const remote = asset.exifInfo?.description?.trim();
   return remote ? `${remote}\n\n${footer}` : footer;
+}
+
+/** Description of the local album created for a link, in the link's language. */
+export function albumDescription(host: string, owner: string, lang: Lang) {
+  return owner ? t(lang, 'federated_from_album_owner', { host, owner }) : t(lang, 'federated_from', { host });
+}
+
+/** User-facing message for a failed sync run (stored as lastError + log entry). */
+export function syncErrorMessage(error: unknown): Msg {
+  if (error instanceof ImmichError && error.status === 401) {
+    // our stored API key stopped working (e.g. deleted by the user); api.ts renews it on the next page visit
+    return msg('api_key_invalid', { detail: error.message });
+  }
+  if (error instanceof ImmichError && error.localized) {
+    return error.localized;
+  }
+  if (error instanceof RemoteError) {
+    return error.toMsg();
+  }
+  return msg('sync_failed', { detail: error instanceof ImmichError ? error.message : errorParam(error) });
 }
 
 export class SyncEngine {
@@ -100,7 +120,7 @@ export class SyncEngine {
     this.#timer.unref();
     this.#startupTimer = setTimeout(() => void this.syncAll(), 30_000);
     this.#startupTimer.unref();
-    log.info(`Sync alle ${this.#config.syncIntervalMinutes} min aktiviert`);
+    log.info(`Sync every ${this.#config.syncIntervalMinutes} min enabled`);
   }
 
   stop() {
@@ -116,7 +136,7 @@ export class SyncEngine {
       try {
         await this.trigger(link.id);
       } catch (error) {
-        log.error(`Sync von ${link.id} fehlgeschlagen`, error);
+        log.error(`Sync of ${link.id} failed`, error);
       }
     }
   }
@@ -180,7 +200,7 @@ export class SyncEngine {
         if (!(error instanceof ImmichError) || (error.status !== 401 && error.status !== 403)) {
           throw error;
         }
-        log.warn(`API-Schlüssel für ${me.email} ungültig, erstelle neuen`);
+        log.warn(`API key for ${me.email} invalid, creating a new one`);
         await this.#immich.deleteApiKey(auth, existing.apiKeyId).catch(() => {});
       }
     }
@@ -190,22 +210,23 @@ export class SyncEngine {
     } catch (error) {
       if (error instanceof ImmichError && (error.status === 400 || error.status === 403)) {
         throw new ImmichError(
-          'Konnte keinen API-Schlüssel für die Synchronisation anlegen. Bitte normal im Immich-Web angemeldet verbinden ' +
-            `(${error.message})`,
+          `${t('en', 'api_key_create_failed')} (${error.message})`,
           403,
+          error.body,
+          msg('api_key_create_failed'),
         );
       }
       throw error;
     }
     this.#store.upsertUser({ id: me.id, email: me.email, name: me.name, apiKeyId: created.id, apiKey: created.secret });
-    log.info(`API-Schlüssel für ${me.email} angelegt`);
+    log.info(`API key for ${me.email} created`);
     return me;
   }
 
   #authFor(link: LinkRow): ImmichAuth {
     const user = this.#store.getUser(link.userId);
     if (!user) {
-      throw new Error('Kein API-Schlüssel für diesen Benutzer gespeichert – Link bitte neu verbinden');
+      throw new LocalizedError('no_api_key');
     }
     return { apiKey: user.apiKey };
   }
@@ -236,18 +257,18 @@ export class SyncEngine {
           throw error;
         })
         .catch((error) => {
-          log.warn(`Konnte lokales Album ${link.albumId} nicht löschen`, error.message);
+          log.warn(`Could not delete local album ${link.albumId}`, error.message);
         });
       const notDeleted = await this.#deleteLocalAssets(auth, removable).catch((error) => {
-        log.warn(`Konnte lokale Assets von ${linkId} nicht löschen`, error.message);
+        log.warn(`Could not delete local assets of ${linkId}`, error.message);
         return [];
       });
       if (notDeleted.length > 0) {
-        log.warn(`${notDeleted.length} lokale Assets von ${linkId} konnten nicht gelöscht werden (gesperrter Ordner?)`);
+        log.warn(`${notDeleted.length} local assets of ${linkId} could not be deleted (locked folder?)`);
       }
     }
     this.#store.deleteLink(linkId);
-    log.info(`Link ${linkId} (${link.serverHost} / ${link.remoteAlbumName}) getrennt, Assets gelöscht: ${deleteAssets}`);
+    log.info(`Link ${linkId} (${link.serverHost} / ${link.remoteAlbumName}) disconnected, assets deleted: ${deleteAssets}`);
   }
 
   // ---------------- the actual sync ----------------
@@ -263,7 +284,7 @@ export class SyncEngine {
       const auth = this.#authFor(link);
 
       // 1. remote link still valid? refresh name/owner/permissions
-      const info = await this.#remote.getLinkInfo(ref);
+      const info = await this.#remote.getLinkInfo(ref, link.lang);
       this.#store.updateLink(linkId, {
         remoteAlbumName: info.albumName,
         remoteOwnerName: info.ownerName,
@@ -284,11 +305,11 @@ export class SyncEngine {
       const toRemove = [...mapped.values()].filter((a) => !remoteIds.has(a.remoteAssetId));
       state.progress.total = toAdd.length;
       log.info(
-        `[${link.serverHost} / ${link.remoteAlbumName}] remote ${remoteAssets.length}, neu ${toAdd.length}, entfernt ${toRemove.length}`,
+        `[${link.serverHost} / ${link.remoteAlbumName}] remote ${remoteAssets.length}, new ${toAdd.length}, removed ${toRemove.length}`,
       );
 
       // 4. import new assets
-      const errors: string[] = [];
+      const errors: Param[] = [];
       const queue = [...toAdd];
       const newLocalIds: string[] = [];
       const worker = async () => {
@@ -301,9 +322,8 @@ export class SyncEngine {
             }
           } catch (error) {
             state.progress.failed++;
-            const message = describeError(error);
-            errors.push(message);
-            log.warn(`Import ${item.id} von ${link!.serverHost} fehlgeschlagen: ${message}`);
+            errors.push(errorParam(error));
+            log.warn(`Import ${item.id} from ${link!.serverHost} failed: ${describeError(error)}`);
           } finally {
             state.progress.done++;
           }
@@ -329,26 +349,26 @@ export class SyncEngine {
       // 6. reconcile local album membership (user removed/trashed/deleted assets locally)
       await this.#reconcileAlbum(link, auth, albumId);
 
-      const failedNote = errors.length
-        ? `${errors.length} Element(e) fehlgeschlagen, z.B.: ${errors[0]}`
-        : null;
-      this.#store.updateLink(linkId, { lastSyncedAt: new Date().toISOString(), lastError: failedNote });
+      const failedNote = errors.length ? msg('items_failed', { count: errors.length, example: errors[0] }) : null;
+      this.#store.updateLink(linkId, {
+        lastSyncedAt: new Date().toISOString(),
+        lastError: failedNote ? encodeStored(failedNote) : null,
+      });
+      const summary = {
+        seconds: Math.round((Date.now() - started) / 1000),
+        added: toAdd.length - errors.length,
+        removed: toRemove.length,
+      };
       this.#store.log(
         linkId,
         errors.length ? 'warn' : 'info',
-        `Sync fertig in ${Math.round((Date.now() - started) / 1000)} s: +${toAdd.length - errors.length} / -${toRemove.length}` +
-          (errors.length ? `, ${errors.length} Fehler` : ''),
+        errors.length ? msg('sync_done_errors', { ...summary, errors: errors.length }) : msg('sync_done', summary),
       );
     } catch (error) {
-      const message =
-        error instanceof ImmichError && error.status === 401
-          ? `${API_KEY_INVALID}: ${error.message}`
-          : error instanceof RemoteError || error instanceof ImmichError
-            ? error.message
-            : `Synchronisation fehlgeschlagen: ${describeError(error)}`;
-      log.warn(`[${link.serverHost}] ${message}`);
+      const message = syncErrorMessage(error);
+      log.warn(`[${link.serverHost}] ${format('en', message)}`);
       if (this.#store.getLink(linkId)) {
-        this.#store.updateLink(linkId, { lastError: message });
+        this.#store.updateLink(linkId, { lastError: encodeStored(message) });
         this.#store.log(linkId, 'error', message);
       }
     }
@@ -369,10 +389,10 @@ export class SyncEngine {
     const album = await this.#immich.createAlbum(
       auth,
       remoteName || link.remoteAlbumName,
-      `Föderiert von ${link.serverHost}${link.remoteOwnerName ? ` (${link.remoteOwnerName})` : ''}`,
+      albumDescription(link.serverHost, link.remoteOwnerName, link.lang),
     );
     this.#store.updateLink(link.id, { albumId: album.id });
-    this.#store.log(link.id, 'warn', 'Lokales Album fehlte und wurde neu angelegt');
+    this.#store.log(link.id, 'warn', msg('album_recreated'));
     return album.id;
   }
 
@@ -404,12 +424,16 @@ export class SyncEngine {
         const response = await this.#remote.fetch(download, { signal: AbortSignal.timeout(60 * 60_000) });
         if (!response.ok) {
           await response.body?.cancel().catch(() => {});
-          throw new RemoteError(`Download ${isVideo ? 'Video' : 'Vorschau'} -> HTTP ${response.status}`, response.status);
+          throw new RemoteError(
+            isVideo ? 'download_video_failed' : 'download_preview_failed',
+            { status: response.status },
+            response.status,
+          );
         }
         const length = Number(response.headers.get('content-length') ?? '');
         if (Number.isFinite(length) && length > maxBytes) {
           await response.body?.cancel().catch(() => {});
-          throw new TooLargeError(`Datei zu groß (${Math.round(length / 1024 / 1024)} MB) – übersprungen`);
+          throw new TooLargeError('file_too_large', { mb: Math.round(length / 1024 / 1024) });
         }
         await streamToFile(response.body, inputFile, maxBytes);
         return (response.headers.get('content-type') ?? '').split(';')[0].trim();
@@ -427,7 +451,7 @@ export class SyncEngine {
         uploadType = 'video/mp4';
         ext = '.mp4';
       } else if (isVideo) {
-        log.warn('ffmpeg nicht verfügbar – Video wird ohne Verkleinerung übernommen');
+        log.warn('ffmpeg not available – importing the video without downscaling');
       }
 
       const filename = uploadFilename(asset.originalFileName, remoteId, ext);
@@ -500,12 +524,12 @@ export class SyncEngine {
     }
     const notDeleted = await this.#deleteLocalAssets(auth, toDelete);
     if (notDeleted.length > 0) {
-      this.#store.log(link.id, 'warn', `${notDeleted.length} lokale Kopie(n) konnten nicht gelöscht werden (gesperrter Ordner?)`);
+      this.#store.log(link.id, 'warn', msg('copies_not_deleted', { count: notDeleted.length }));
     }
     if (toUnlink.length > 0) {
       await this.#immich
         .request('DELETE', `/api/albums/${albumId}/assets`, auth, { body: { ids: toUnlink } })
-        .catch((error) => log.warn(`Konnte Assets nicht aus Album entfernen: ${error.message}`));
+        .catch((error) => log.warn(`Could not remove assets from album: ${error.message}`));
     }
     for (const row of rows) {
       this.#store.deleteAsset(link.id, row.remoteAssetId);
@@ -553,7 +577,7 @@ export class SyncEngine {
   #metadataBody(link: LinkRow, asset: RemoteAsset) {
     const body: Record<string, unknown> = {
       dateTimeOriginal: buildDateTimeOriginal(asset),
-      description: federationDescription(asset, link.serverHost, link.remoteOwnerName),
+      description: federationDescription(asset, link.serverHost, link.remoteOwnerName, link.lang),
     };
     const { latitude, longitude } = asset.exifInfo ?? {};
     if (typeof latitude === 'number' && typeof longitude === 'number' && (latitude !== 0 || longitude !== 0)) {
@@ -568,7 +592,7 @@ export class SyncEngine {
       await this.#immich.updateAsset(auth, localId, this.#metadataBody(link, asset));
       return true;
     } catch (error) {
-      log.warn(`Metadaten für ${localId} nicht gesetzt (wird beim nächsten Sync erneut versucht): ${describeError(error)}`);
+      log.warn(`Metadata for ${localId} not set (retried on the next sync): ${describeError(error)}`);
       return false;
     }
   }
@@ -593,7 +617,7 @@ export class SyncEngine {
         if (error instanceof ImmichError && (error.status === 400 || error.status === 404)) {
           continue; // local asset gone -> reconcile handles it
         }
-        log.warn(`Metadaten-Nachtrag für ${row.localAssetId} fehlgeschlagen: ${describeError(error)}`);
+        log.warn(`Metadata retry for ${row.localAssetId} failed: ${describeError(error)}`);
       }
     }
   }

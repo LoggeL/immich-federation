@@ -1,3 +1,4 @@
+import { DEFAULT_LANG, LocalizedError, msg, t, type Lang, type MessageKey, type Msg, type Params } from './i18n.ts';
 import { safeFetch, type FetchLike } from './ssrf.ts';
 import { shareAuthParams } from './share-url.ts';
 
@@ -54,11 +55,15 @@ export interface RemoteAsset {
   };
 }
 
-export class RemoteError extends Error {
+export class RemoteError extends LocalizedError {
   status: number;
-  constructor(message: string, status: number) {
-    super(message);
+  constructor(key: MessageKey, params: Params, status: number) {
+    super(key, params);
     this.status = status;
+  }
+
+  static from(message: Msg, status: number) {
+    return new RemoteError(message.$t, message.p ?? {}, status);
   }
 }
 
@@ -102,12 +107,13 @@ export class RemoteClient {
       } catch {
         /* ignore */
       }
-      throw new RemoteError(describeRemoteStatus(response.status, detail), response.status);
+      throw RemoteError.from(describeRemoteStatus(response.status, detail), response.status);
     }
     return (await response.json()) as T;
   }
 
-  async getLinkInfo(link: RemoteLinkRef): Promise<RemoteLinkInfo> {
+  /** `lang` only picks the fallback album name for links without one. */
+  async getLinkInfo(link: RemoteLinkRef, lang: Lang = DEFAULT_LANG): Promise<RemoteLinkInfo> {
     const raw = await this.#json<any>(link, '/api/shared-links/me');
     const album = raw.album ?? null;
     const owner = album?.albumUsers?.find((u: any) => u.role === 'owner')?.user ?? album?.albumUsers?.[0]?.user;
@@ -115,7 +121,7 @@ export class RemoteClient {
       id: raw.id,
       type: raw.type,
       albumId: album?.id ?? null,
-      albumName: album?.albumName || raw.description || 'Föderiertes Album',
+      albumName: album?.albumName || raw.description || t(lang, 'default_album_name'),
       ownerName: owner?.name || owner?.email || '',
       allowDownload: raw.allowDownload !== false,
       showMetadata: raw.showMetadata !== false,
@@ -170,16 +176,16 @@ export class RemoteClient {
   }
 }
 
-export function describeRemoteStatus(status: number, detail = ''): string {
+export function describeRemoteStatus(status: number, detail = ''): Msg {
   const suffix = detail ? ` (${detail})` : '';
   if (status === 401 && /password/i.test(detail)) {
-    return 'Der Freigabelink ist passwortgeschützt – das wird nicht unterstützt';
+    return msg('remote_password');
   }
   if (status === 401 || status === 403) {
-    return `Freigabelink ungültig, abgelaufen oder widerrufen${suffix}`;
+    return msg('remote_link_invalid', { suffix });
   }
   if (status === 404) {
-    return `Nicht gefunden auf dem entfernten Server${suffix}`;
+    return msg('remote_not_found', { suffix });
   }
-  return `Entfernter Server antwortete mit HTTP ${status}${suffix}`;
+  return msg('remote_http', { status, suffix });
 }

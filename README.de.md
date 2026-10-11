@@ -171,6 +171,7 @@ Sync und Original-Streaming laufen weiter, und `/federation/` funktioniert immer
   Fotos). Live-Fotos: nur das Standbild. Gestapelte Fotos: einzeln.
 * Experimentelles HLS-Echtzeit-Transcoding von Immich: Videos spielen dann die lokale 480p-Kopie.
 * Passwortgeschützte Freigabelinks werden nicht unterstützt.
+* Übersetzt sind bisher nur Deutsch und Englisch; andere Immich-Sprachen zeigen Englisch.
 * Die Oberflächen-Erweiterungen hängen am DOM der Immich-Web-App und können nach einem Immich-Update verschwinden;
   Sync, Original-Streaming und `/federation/` laufen trotzdem weiter (siehe oben).
 
@@ -182,6 +183,24 @@ Sync und Original-Streaming laufen weiter, und `/federation/` funktioniert immer
    `docker compose up -d --remove-orphans`.
 3. In Immich unter *Kontoeinstellungen → API-Schlüssel* den Schlüssel **„Immich Federation Gateway"** löschen
    (je Benutzer, der Föderation genutzt hat).
+
+## Sprache
+
+Die eingeblendete Oberfläche und die Seite `/federation/` nutzen die in Immich gewählte Sprache
+(**Kontoeinstellungen → App-Einstellungen → Sprache**, von Immich im Browser gespeichert), sonst die
+Browsersprachen, sonst Englisch. Datum und Zahlen folgen Immichs Einstellung
+*Benutzerdefiniertes Gebietsschema*. Ein
+Sprachwechsel in Immich greift ohne Neuladen. Unterstützt: **Deutsch** (inkl. Schweizerdeutsch-Varianten) und
+**Englisch**.
+
+* Der Browser schickt die Sprache ans Gateway (`X-Federation-Lang`, sonst `Accept-Language`); Fehlermeldungen,
+  Sync-Status und das Protokoll pro Link kommen in deiner Sprache. API-Fehler enthalten zusätzlich einen stabilen
+  `code`. Server-Logs sind immer Englisch.
+* Texte, die das Gateway **in Immich schreibt** (Albumbeschreibung, Zusatz „Föderiert von …" in der
+  Fotobeschreibung), nutzen die Sprache der Person, die den Link verbunden hat – festgelegt beim Verbinden. Links
+  aus Versionen vor der Sprachunterstützung bleiben Deutsch.
+* Neue Sprache: Katalog in `public/i18n.js` (Oberfläche) und `src/i18n.ts` (Server-Meldungen) ergänzen; fehlende
+  Schlüssel fallen auf Englisch zurück.
 
 ## Konfiguration
 
